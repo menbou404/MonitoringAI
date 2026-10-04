@@ -38,7 +38,7 @@ monitor-core/
 
   | 項目 | 既定値 |
   |---|---|
-  | `state_roots` | [データソース仕様 1](data-source.md#1-状態ルートの場所)の2か所（`default_state_roots()` で求める） |
+  | `state_roots` | [データソース仕様 1](data-source.md#1-状態ルートの場所)の場所。`%USERPROFILE%` の下の既定の場所と `%TEMP%codex-companion` は**常に**含め、`CLAUDE_PLUGIN_DATA` があればその下も加える（重複は除く）。`default_state_roots()` で求める |
   | `extra_state_roots` | なし |
   | `installed_plugins_path` | `%USERPROFILE%\.claude\plugins\installed_plugins.json` |
   | `supported_plugin_versions` | `1.0.` で始まるもの |
@@ -56,11 +56,14 @@ monitor-core/
 ## 2. 監視の流れ
 
 1. **列挙**: 起動時と定期スキャンのたびに、全状態ルート（[データソース仕様 1](data-source.md#1-状態ルートの場所)と、設定で追加したもの）の下の `*/state.json` を探す。
-2. **変更の監視**: 状態ルートを再帰的に監視する（`notify`）。変更通知は200msまとめてから処理する。状態ルートがまだ無い場合は、親ディレクトリを監視して作成を待つ。
+2. **変更の監視**: 状態ルートを再帰的に監視する（`notify`）。変更通知は200msまとめてから処理する。
+   - **再帰的に監視してよいのは、状態ルートそのものだけ**とする。状態ルートがまだ無い場合は、存在する最も近い親ディレクトリを**再帰なしで**監視し、状態ルートが作られたら監視を張り直す。親（例: `%TEMP%`）を再帰的に監視すると、無関係な書き込みのたびに処理が走り、待機中もCPUを使い続けるため。
+   - 変更通知を受けたら、たまった通知をまとめて1回だけ処理する。処理は「更新時刻とサイズが変わったファイルだけを読み直す」とし、全ファイルを強制的に読み直さない。
 3. **定期スキャン**: 変更通知は取りこぼすことがあるので、**5秒ごとに**全 `state.json` の更新時刻とサイズを確かめ、変わっていれば読み直す。
 4. **読み込み**:
    - ファイルは読み取り専用で開く。プラグイン側の書き込みや削除を妨げないよう、共有モードは読み・書き・削除のすべてを許可する（Rust標準の `File::open` の既定値がそうなっている）。
    - 空のファイルやJSONの解析エラーは「書き込み途中」とみなし、100ms間隔で3回まで読み直す。それでも駄目なら**前回読めた内容を使い続け**、警告を記録する（`tracing`）。
+   - ファイルの読み込み（読み直しの待ちを含む）は、スナップショットのロックを持たずに行う。ロックは、読み終えた結果を反映する間だけ持つ。`snapshot()` などの問い合わせを待たせないため。
 5. **生存確認**: 5秒ごとに、`queued` / `running` のジョブの `pid` を確かめる（[3. 実効状態の判定](#3-実効状態の判定)）。
 6. **ログの差分読み込み**: [4. ログの差分読み込み](#4-ログの差分読み込み)。
 7. **変更の検出**: 前回のスナップショットと比べ、変更イベントを出す（[5. 公開するインターフェース](#5-公開するインターフェース)）。
@@ -78,7 +81,10 @@ monitor-core/
 | `Completed` / `Failed` / `Cancelled` | `status` がそれぞれの値 | 完了 / 失敗 / キャンセル |
 | `Unknown` | 知らない `status` | 値をそのまま表示 |
 
-- **PIDの使い回しに注意する。** pid が生きていても、そのプロセスの作成時刻がジョブの `createdAt` より後なら、別のプロセスとみなして `Orphaned` にする。作成時刻は `GetProcessTimes` で取る。実行ファイル名が `node.exe` であることも確かめる。
+- **PIDの使い回しに注意する。** pid が生きていても、そのプロセスの作成時刻が次の「基準時刻」より**1秒以上後**なら、別のプロセスとみなして `Orphaned` にする。作成時刻は `GetProcessTimes` で取る。実行ファイル名が `node.exe` であることも確かめる。
+  - 基準時刻は、`running` なら `startedAt`、`queued` なら `updatedAt`（`state.json` 側）とする。無ければ判定を省く（生きているものとして扱う）。
+  - **`createdAt` は基準にしない。** バックグラウンド実行では、プラグインはジョブを作って（`createdAt`）からワーカーのプロセスを起動するので、正常なジョブでもプロセスの作成時刻が `createdAt` より後になる。一方、`queued` の記録（`updatedAt`）はワーカーの起動後に、`running` の記録（`startedAt`）はワーカー自身が起動後に書く（[データソース仕様 6](data-source.md#6-プロセスの構造)）。
+  - 1秒の余裕は、時刻の丸めの差を吸収するため。
 - `Quiet` の判定には `updatedAt` を使わない。同じフェーズの間は更新されないため（[データソース仕様 5](data-source.md#5-書き込みの仕方)）。
 - 経過時間は `startedAt`（無ければ `createdAt`）から数える。
 
@@ -101,7 +107,7 @@ Tauri側（[トレイと通知](tray-notification.md)、[画面](window-ui.md)�
 | `Monitor::start(config) -> (Monitor, Receiver<MonitorEvent>)` | 監視を始める。`config` は状態ルート、`Quiet` までの分数など |
 | `Monitor::snapshot()` | 全ジョブの `JobSummary`（実効状態を含む） |
 | `Monitor::job_detail(id)` | ジョブファイルを読み足した `JobDetail` |
-| `Monitor::read_log(id, from)` | `{ text, start, end, truncatedBefore }` |
+| `Monitor::read_log(id, from: Option<u64>)` | `{ text, start, end, truncatedBefore }`。`from` を省くと末尾から `initial_log_bytes` 分。`truncatedBefore` は「`start` より前にまだ読んでいない内容がある」（`start > 0`） |
 | `Monitor::subscribe_log(id)` / `unsubscribe_log(id)` | ログの購読の開始・終了 |
 | `Monitor::health()` | プラグインのバージョン、監視中の状態ルート、直近のエラー |
 | `Monitor::update_config(config)` | 設定の変更を反映する |
@@ -111,7 +117,7 @@ Tauri側（[トレイと通知](tray-notification.md)、[画面](window-ui.md)�
 | 種類 | 内容 |
 |---|---|
 | `JobsChanged { changed, removed }` | 追加・状態の変化・フェーズの変化・最新メッセージの変化があったジョブと、削除されたID |
-| `StateTransition { id, from, to }` | 実効状態の変化。通知の判定に使う。**監視を始めたときの最初の読み込みでは出さない** |
+| `StateTransition { id, from: Option<EffectiveState>, to }` | 実効状態の変化。通知の判定に使う。**監視を始めたときの最初の読み込みでは出さない**。それ以降に新しく現れたジョブは `from: None` で出す（現れた時点で `Running` のジョブや、スキャンの間に始まって終わったジョブも通知できるように） |
 | `LogAppended { id, text, start, end }` | 購読中のジョブのログの追記 |
 | `HealthChanged(health)` | バージョンの不一致や読み込みエラーなど |
 
@@ -125,3 +131,6 @@ Tauri側（[トレイと通知](tray-notification.md)、[画面](window-ui.md)�
   - 空のファイル、途中で切れたJSON
 - **単体テスト**: 読み込み、実効状態の判定（PIDの生存・使い回し・作成時刻はトレイトで差し替える）、変更の検出、ログの差分読み込み（追記、作り直し、削除、ブロック形式、マルチバイト文字の境目）。
 - **結合テスト**: 一時ディレクトリを状態ルートにし、プラグインの書き込み（途中までの書き込み、51件以上による削除、状態ディレクトリの追加と削除）を再現して、スナップショットと変更イベントを確かめる。
+  - **バックグラウンド実行の時刻の並び**（`createdAt` < プロセスの作成時刻 ≦ `updatedAt`（queued）/ `startedAt`（running））で `Orphaned` にならないこと。
+  - 監視開始後に新しく現れたジョブで、`from: None` の `StateTransition` が出ること。
+- **待機中の負荷**: 状態ルートが無い状態で、その親ディレクトリに無関係なファイルを書き続けても、状態ファイルの読み込みが定期スキャン以外で起きないこと。

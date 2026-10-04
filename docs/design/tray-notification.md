@@ -51,6 +51,7 @@ Windowsのトースト通知（`tauri-plugin-notification`）を使う。[監視
 | `Quiet` になった | オフ | 「Codexが N 分応答していません: <ワークスペース>」 |
 
 - 本アプリの起動時に、すでに終わっていたジョブは通知しない（`StateTransition` は最初の読み込みでは出ない）。
+- 監視中に新しく現れたジョブは `from: None` の `StateTransition` で届く。現れた時点で `Completed` / `Failed` なら、それぞれの通知を出す。
 - 通知をクリックしたら、ウィンドウを開いてそのジョブを表示する。
 - オン・オフは全体と、きっかけごとに設定できる（[アプリの土台](app-shell.md#3-設定)）。
 
