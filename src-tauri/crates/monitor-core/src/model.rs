@@ -131,7 +131,7 @@ pub enum MonitorEvent {
     },
     StateTransition {
         id: String,
-        from: EffectiveState,
+        from: Option<EffectiveState>,
         to: EffectiveState,
     },
     LogAppended {

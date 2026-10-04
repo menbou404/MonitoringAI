@@ -5,16 +5,33 @@ use std::{
 };
 
 pub fn default_state_roots() -> Vec<PathBuf> {
+    state_roots_from(
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+        std::env::var_os("TEMP").map(PathBuf::from),
+        std::env::var_os("CLAUDE_PLUGIN_DATA").map(PathBuf::from),
+    )
+}
+
+fn state_roots_from(
+    home: Option<PathBuf>,
+    temp: Option<PathBuf>,
+    data: Option<PathBuf>,
+) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(data) = std::env::var_os("CLAUDE_PLUGIN_DATA") {
-        roots.push(PathBuf::from(data).join("state"));
-    } else if let Some(home) = std::env::var_os("USERPROFILE") {
-        roots.push(PathBuf::from(home).join(".claude/plugins/data/codex-openai-codex/state"));
+    if let Some(home) = home {
+        roots.push(home.join(".claude/plugins/data/codex-openai-codex/state"));
     }
-    if let Some(temp) = std::env::var_os("TEMP") {
-        roots.push(PathBuf::from(temp).join("codex-companion"));
+    if let Some(temp) = temp {
+        roots.push(temp.join("codex-companion"));
+    }
+    if let Some(data) = data {
+        roots.push(data.join("state"));
     }
     roots
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -100,5 +117,23 @@ mod tests {
         assert_eq!(state_files(std::slice::from_ref(&root)).len(), 1);
         std::fs::remove_dir_all(&workspace).unwrap();
         assert!(state_files(&[root]).is_empty());
+    }
+
+    #[test]
+    fn default_roots_include_home_temp_and_plugin_override() {
+        let home = PathBuf::from("fiction/home");
+        let temp = PathBuf::from("fiction/temp");
+        let default_data = home.join(".claude/plugins/data/codex-openai-codex");
+        let roots = state_roots_from(Some(home.clone()), Some(temp.clone()), Some(default_data));
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&home.join(".claude/plugins/data/codex-openai-codex/state")));
+        assert!(roots.contains(&temp.join("codex-companion")));
+        let roots = state_roots_from(
+            Some(home),
+            Some(temp),
+            Some(PathBuf::from("fiction/override")),
+        );
+        assert_eq!(roots.len(), 3);
+        assert!(roots.contains(&PathBuf::from("fiction/override/state")));
     }
 }

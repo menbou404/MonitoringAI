@@ -148,14 +148,16 @@ impl Store {
         }
         if self.initialized {
             for (id, value) in &next {
-                if let Some(old) = self.summaries.get(id) {
-                    if old.effective_state != value.effective_state {
-                        events.push(MonitorEvent::StateTransition {
-                            id: id.clone(),
-                            from: old.effective_state.clone(),
-                            to: value.effective_state.clone(),
-                        });
-                    }
+                let from = self
+                    .summaries
+                    .get(id)
+                    .map(|old| old.effective_state.clone());
+                if from.as_ref() != Some(&value.effective_state) {
+                    events.push(MonitorEvent::StateTransition {
+                        id: id.clone(),
+                        from,
+                        to: value.effective_state.clone(),
+                    });
                 }
             }
         }
@@ -189,10 +191,17 @@ pub(crate) fn effective_state(
             let Some(info) = job.pid.and_then(|pid| probe.probe(pid)) else {
                 return EffectiveState::Orphaned;
             };
+            let reference = if job.status == "running" {
+                job.started_at
+            } else {
+                job.updated_at
+            };
             if info
                 .created_at
-                .zip(job.created_at)
-                .is_some_and(|(process, job)| process > job)
+                .zip(reference)
+                .is_some_and(|(process, baseline)| {
+                    process.signed_duration_since(baseline) >= chrono::Duration::seconds(1)
+                })
                 || info
                     .executable_name
                     .as_deref()
@@ -278,7 +287,10 @@ mod tests {
         );
         assert_eq!(
             effective_state(
-                &job("running"),
+                &Job {
+                    started_at: Some(now),
+                    ..job("running")
+                },
                 None,
                 &reused,
                 &SystemClock,
@@ -322,5 +334,72 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, MonitorEvent::StateTransition { .. }))
         );
+    }
+
+    #[test]
+    fn process_time_uses_status_timestamp_with_one_second_tolerance() {
+        let baseline = Utc::now();
+        let created = baseline - chrono::Duration::seconds(5);
+        let process = |at| {
+            Probe(Some(ProcessInfo {
+                created_at: Some(at),
+                executable_name: Some("node.exe".into()),
+            }))
+        };
+        for status in ["queued", "running"] {
+            let mut current = job(status);
+            current.created_at = Some(created);
+            current.updated_at = Some(baseline);
+            current.started_at = Some(baseline);
+            for at in [
+                created + chrono::Duration::seconds(1),
+                baseline,
+                baseline + chrono::Duration::milliseconds(999),
+            ] {
+                assert_eq!(
+                    effective_state(
+                        &current,
+                        None,
+                        &process(at),
+                        &SystemClock,
+                        Duration::from_secs(600)
+                    ),
+                    if status == "queued" {
+                        EffectiveState::Queued
+                    } else {
+                        EffectiveState::Running
+                    }
+                );
+            }
+            assert_eq!(
+                effective_state(
+                    &current,
+                    None,
+                    &process(baseline + chrono::Duration::seconds(1)),
+                    &SystemClock,
+                    Duration::from_secs(600)
+                ),
+                EffectiveState::Orphaned
+            );
+            if status == "queued" {
+                current.updated_at = None;
+            } else {
+                current.started_at = None;
+            }
+            assert_eq!(
+                effective_state(
+                    &current,
+                    None,
+                    &process(baseline + chrono::Duration::hours(1)),
+                    &SystemClock,
+                    Duration::from_secs(600)
+                ),
+                if status == "queued" {
+                    EffectiveState::Queued
+                } else {
+                    EffectiveState::Running
+                }
+            );
+        }
     }
 }

@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
@@ -16,7 +17,7 @@ use crate::{
     log_tail::{LogTail, latest_message, modified_at},
     parser::{read_installed_version, read_job, read_state},
     store::{Store, safe_id},
-    watcher::RootWatcher,
+    watcher::{RootWatcher, watch_targets},
 };
 
 enum Command {
@@ -30,6 +31,7 @@ pub struct Monitor {
     store: Arc<Mutex<Store>>,
     health: Arc<Mutex<Health>>,
     details: Arc<Mutex<BTreeMap<String, crate::Job>>>,
+    initial_log_bytes: AtomicU64,
     command: Sender<Command>,
     thread: Option<JoinHandle<()>>,
 }
@@ -45,6 +47,7 @@ impl Monitor {
         probe: Arc<dyn ProcessProbe>,
         clock: Arc<dyn Clock>,
     ) -> (Self, Receiver<MonitorEvent>) {
+        let initial_log_bytes = AtomicU64::new(config.initial_log_bytes);
         let store = Arc::new(Mutex::new(Store::new()));
         let health = Arc::new(Mutex::new(Health {
             plugin_version: None,
@@ -66,6 +69,7 @@ impl Monitor {
                 store,
                 health,
                 details,
+                initial_log_bytes,
                 command: command_tx,
                 thread: Some(thread),
             },
@@ -120,7 +124,7 @@ impl Monitor {
         })
     }
 
-    pub fn read_log(&self, id: &str, from: u64) -> std::io::Result<Option<LogChunk>> {
+    pub fn read_log(&self, id: &str, from: Option<u64>) -> std::io::Result<Option<LogChunk>> {
         if !safe_id(id) {
             return Ok(None);
         }
@@ -134,7 +138,17 @@ impl Monitor {
             return Ok(None);
         };
         let path = directory.join("jobs").join(format!("{id}.log"));
-        match crate::read_log_chunk(&path, from) {
+        let start = match from {
+            Some(from) => from,
+            None => match std::fs::metadata(&path) {
+                Ok(metadata) => metadata
+                    .len()
+                    .saturating_sub(self.initial_log_bytes.load(Ordering::Relaxed)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            },
+        };
+        match crate::read_log_chunk(&path, start) {
             Ok(chunk) => Ok(Some(chunk)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
@@ -153,6 +167,8 @@ impl Monitor {
         self.health.lock().expect("health lock").clone()
     }
     pub fn update_config(&self, config: MonitorConfig) {
+        self.initial_log_bytes
+            .store(config.initial_log_bytes, Ordering::Relaxed);
         let _ = self.command.send(Command::Update(config));
     }
 }
@@ -210,8 +226,9 @@ impl Worker {
 
     fn run(mut self, commands: Receiver<Command>) {
         let (wake_tx, wake_rx) = mpsc::channel();
+        let mut targets = watch_targets(&self.config.roots());
         let mut watcher = self.watch(wake_tx.clone());
-        self.scan(true);
+        self.scan();
         let mut rescan = Instant::now();
         let mut liveness = Instant::now();
         loop {
@@ -220,24 +237,33 @@ impl Worker {
                 Ok(Command::Update(config)) => {
                     self.config = config;
                     self.stamps.clear();
+                    targets = watch_targets(&self.config.roots());
                     watcher = self.watch(wake_tx.clone());
-                    self.scan(true);
+                    self.scan();
                     rescan = Instant::now();
                     liveness = Instant::now();
                 }
                 Ok(Command::Subscribe(id)) => {
                     self.subscribed.insert(id);
-                    self.scan(false);
+                    self.scan();
                 }
                 Ok(Command::Unsubscribe(id)) => {
                     self.subscribed.remove(&id);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            let woke = wake_rx.try_recv().is_ok();
+            let mut woke = false;
+            while wake_rx.try_recv().is_ok() {
+                woke = true;
+            }
             if woke || rescan.elapsed() >= self.config.rescan_interval {
-                self.scan(woke);
+                self.scan();
                 rescan = Instant::now();
+                let current_targets = watch_targets(&self.config.roots());
+                if current_targets != targets || watcher.is_none() {
+                    watcher = self.watch(wake_tx.clone());
+                    targets = current_targets;
+                }
             } else if liveness.elapsed() >= self.config.liveness_interval {
                 self.reconcile();
                 liveness = Instant::now();
@@ -260,82 +286,97 @@ impl Worker {
         }
     }
 
-    fn scan(&mut self, force: bool) {
+    fn scan(&mut self) {
         let roots = self.config.roots();
         let found = state_files(&roots);
         let mut error = None;
-        {
-            let mut store = self.store.lock().expect("store lock");
-            store.retain_sources(&found);
-            self.stamps.retain(|path, _| found.contains(path));
-            for path in &found {
-                let Ok(metadata) = std::fs::metadata(path) else {
-                    continue;
-                };
-                let stamp = (metadata.modified().ok(), metadata.len());
-                if force || self.stamps.get(path) != Some(&stamp) {
-                    match read_state(path) {
-                        Ok(jobs) => {
-                            store.replace_source(path.clone(), jobs);
-                            self.stamps.insert(path.clone(), stamp);
-                        }
-                        Err(_) => {
-                            error = Some("State file read failed".to_owned());
-                            tracing::warn!("state file read failed");
-                        }
+        let mut updates = Vec::new();
+        self.stamps.retain(|path, _| found.contains(path));
+        for path in &found {
+            let Ok(metadata) = std::fs::metadata(path) else {
+                continue;
+            };
+            let stamp = (metadata.modified().ok(), metadata.len());
+            if self.stamps.get(path) != Some(&stamp) {
+                match read_state(path) {
+                    Ok(jobs) => {
+                        updates.push((path.clone(), jobs));
+                        self.stamps.insert(path.clone(), stamp);
+                    }
+                    Err(_) => {
+                        error = Some("State file read failed".to_owned());
+                        tracing::warn!("state file read failed");
                     }
                 }
             }
-            let candidates = store.log_candidates();
-            self.latest
-                .retain(|id, _| candidates.iter().any(|(candidate, _, _)| candidate == id));
-            self.log_context
-                .retain(|id, _| candidates.iter().any(|(candidate, _, _)| candidate == id));
-            self.tail
-                .retain_paths(&candidates.iter().map(|(_, _, path)| path.clone()).collect());
-            for (id, status, path) in candidates {
-                if status != "running" && !self.subscribed.contains(&id) {
-                    continue;
-                }
-                match self.tail.poll(&path, self.config.initial_log_bytes) {
-                    Ok(Some(chunk)) => {
-                        if chunk.start == 0 {
-                            self.latest.remove(&id);
-                            self.log_context.remove(&id);
-                        }
-                        let context = self.log_context.entry(id.clone()).or_default();
-                        context.push_str(&chunk.text);
-                        if context.len() > 4096 {
-                            let mut trim = context.len() - 4096;
-                            while !context.is_char_boundary(trim) {
-                                trim += 1;
-                            }
-                            context.drain(..trim);
-                        }
-                        if let Some(message) = latest_message(context) {
-                            self.latest.insert(id.clone(), message);
-                        }
-                        if self.subscribed.contains(&id) {
-                            let _ = self.events.send(MonitorEvent::LogAppended {
-                                id: id.clone(),
-                                text: chunk.text,
-                                start: chunk.start,
-                                end: chunk.end,
-                            });
-                        }
+        }
+        let candidates = {
+            let mut store = self.store.lock().expect("store lock");
+            store.retain_sources(&found);
+            for (path, jobs) in updates {
+                store.replace_source(path, jobs);
+            }
+            store.log_candidates()
+        };
+        self.latest
+            .retain(|id, _| candidates.iter().any(|(candidate, _, _)| candidate == id));
+        self.log_context
+            .retain(|id, _| candidates.iter().any(|(candidate, _, _)| candidate == id));
+        self.tail
+            .retain_paths(&candidates.iter().map(|(_, _, path)| path.clone()).collect());
+        let mut log_updates = Vec::new();
+        for (id, status, path) in candidates {
+            if status != "running" && !self.subscribed.contains(&id) {
+                continue;
+            }
+            match self.tail.poll(&path, self.config.initial_log_bytes) {
+                Ok(Some(chunk)) => {
+                    if chunk.start == 0 {
+                        self.latest.remove(&id);
+                        self.log_context.remove(&id);
                     }
-                    Ok(None) => {
-                        if !path.exists() || std::fs::metadata(&path).is_ok_and(|m| m.len() == 0) {
-                            self.latest.remove(&id);
-                            self.log_context.remove(&id);
+                    let context = self.log_context.entry(id.clone()).or_default();
+                    context.push_str(&chunk.text);
+                    if context.len() > 4096 {
+                        let mut trim = context.len() - 4096;
+                        while !context.is_char_boundary(trim) {
+                            trim += 1;
                         }
+                        context.drain(..trim);
                     }
-                    Err(_) => {
-                        error = Some("Log file read failed".to_owned());
-                        tracing::warn!("log file read failed");
+                    if let Some(message) = latest_message(context) {
+                        self.latest.insert(id.clone(), message);
+                    }
+                    if self.subscribed.contains(&id) {
+                        let _ = self.events.send(MonitorEvent::LogAppended {
+                            id: id.clone(),
+                            text: chunk.text,
+                            start: chunk.start,
+                            end: chunk.end,
+                        });
                     }
                 }
-                store.set_log(&id, self.latest.get(&id).cloned(), modified_at(&path));
+                Ok(None) => {
+                    if !path.exists() || std::fs::metadata(&path).is_ok_and(|m| m.len() == 0) {
+                        self.latest.remove(&id);
+                        self.log_context.remove(&id);
+                    }
+                }
+                Err(_) => {
+                    error = Some("Log file read failed".to_owned());
+                    tracing::warn!("log file read failed");
+                }
+            }
+            log_updates.push((
+                id.clone(),
+                self.latest.get(&id).cloned(),
+                modified_at(&path),
+            ));
+        }
+        {
+            let mut store = self.store.lock().expect("store lock");
+            for (id, latest, modified) in log_updates {
+                store.set_log(&id, latest, modified);
             }
         }
         self.reconcile();

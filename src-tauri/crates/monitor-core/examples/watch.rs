@@ -22,7 +22,8 @@ fn main() {
                 }
             }
             MonitorEvent::StateTransition { id, from, to } => {
-                println!("id={id} {from:?} -> {to:?}")
+                let previous = from.map_or_else(|| "new".to_owned(), |state| format!("{state:?}"));
+                println!("id={id} {previous} -> {to:?}")
             }
             MonitorEvent::LogAppended { id, start, end, .. } => {
                 println!("id={id} log bytes {start}..{end}")

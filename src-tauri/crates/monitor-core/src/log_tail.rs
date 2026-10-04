@@ -70,7 +70,7 @@ pub fn read_log_chunk(path: &Path, from: u64) -> std::io::Result<LogChunk> {
         text,
         start,
         end: start + valid as u64,
-        truncated_before: from > 0 || from > len,
+        truncated_before: start > 0,
     })
 }
 
