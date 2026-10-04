@@ -18,12 +18,40 @@ monitor-core/
 │  ├─ liveness.rs    PIDの生存確認（トレイトで差し替えられるようにする）
 │  ├─ log_tail.rs    ログの差分読み込み
 │  └─ store.rs       スナップショットの保持、実効状態の判定、変更の検出
+├─ examples/
+│  └─ watch.rs       手動確認用。実際の状態ルートを監視してイベントを標準出力に出す
 └─ tests/            fixtureを使った結合テスト
 ```
 
-主な依存: `notify` + `notify-debouncer-full`、`serde` / `serde_json`、`windows`（PIDとプロセス作成時刻の取得）、`tracing`。
+依存は [Cargo.toml](../../src-tauri/crates/monitor-core/Cargo.toml) にあるものだけを使う: `notify` + `notify-debouncer-full`、`serde` / `serde_json`、`chrono`、`thiserror`、`tracing`、`windows`（Windowsのみ）、`ts-rs`（`ts` 機能のときだけ）、`tempfile`（テストのみ）。
 
 **Windows固有の処理は `liveness.rs` だけに置く。** 他のモジュールはOSに依存させない。
+
+### 1.1 実装の取り決め
+
+- **同期処理（スレッド）で作る。** async ランタイムに依存しない。Tauri側は tokio を使うが、監視コアはスレッドとチャンネル（`std::sync::mpsc`）で完結させ、Tauri側で受け取って橋渡しする。`Monitor` を drop したら、内部のスレッドは全部止まる。
+- **時刻**は `chrono::DateTime<Utc>` で持つ。解析できない時刻は `None` として扱い、ジョブ自体は捨てない。
+- **テストのための差し替え口**を2つ設ける。
+  - `ProcessProbe` トレイト: `pid` から「プロセスの作成時刻」と「実行ファイル名」を返す（存在しなければ `None`）。Windowsでは `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetProcessTimes` + `GetExitCodeProcess` + `QueryFullProcessImageNameW` で実装する。Windows以外では「判定できない」を返し、生きているものとして扱う。
+  - `Clock` トレイト: 現在時刻を返す。`Quiet` の判定と経過時間のテストで使う。
+- **設定**（`MonitorConfig`）の項目と既定値:
+
+  | 項目 | 既定値 |
+  |---|---|
+  | `state_roots` | [データソース仕様 1](data-source.md#1-状態ルートの場所)の2か所（`default_state_roots()` で求める） |
+  | `extra_state_roots` | なし |
+  | `installed_plugins_path` | `%USERPROFILE%\.claude\plugins\installed_plugins.json` |
+  | `supported_plugin_versions` | `1.0.` で始まるもの |
+  | `quiet_after` | 10分 |
+  | `rescan_interval` / `liveness_interval` | 5秒 / 5秒 |
+  | `debounce` | 200ms |
+  | `initial_log_bytes` | 1MB |
+
+- **型**: 画面に渡す型（`JobSummary`、`JobDetail`、`EffectiveState`、`LogChunk`、`Health` など）は `serde::Serialize` を付け、`ts` 機能のときだけ `#[cfg_attr(feature = "ts", derive(ts_rs::TS))]` を付ける。フィールド名は camelCase で出す。
+- **`JobSummary` に最低限持たせる項目**: `id`、`workspaceRoot`、`workspaceName`（`workspaceRoot` の末尾のフォルダ名）、`kind`、`kindLabel`、`title`、`summary`（`state.json` 側）、`status` と `phase`（生の文字列）、`effectiveState`、`createdAt` / `startedAt` / `completedAt` / `updatedAt`、`pid`、`threadId`、`write`、`sessionId`、`latestMessage`、`logModifiedAt`。
+- **`JobDetail` の追加項目**: `prompt`（依頼の全文。取り方は[データソース仕様 3](data-source.md#3-ジョブのフィールド)）、`turnId`、`model`、`effort`、`rendered`、`errorMessage`、`logFile`。
+- **`latestMessage`**: ログの最後の1行の形式のメッセージ（ブロックなら見出し＋本文の1行目）。200文字で切る。
+- **手動確認用の `examples/watch.rs`**: 既定の設定で監視を始め、`MonitorEvent` を1行ずつ標準出力に出す。出すのはID、ワークスペース名、`status`、`phase`、実効状態、`latestMessage` の先頭まで。依頼の全文は出さない。Ctrl+Cで終わる。
 
 ## 2. 監視の流れ
 
@@ -57,6 +85,7 @@ monitor-core/
 ## 4. ログの差分読み込み
 
 - 対象は、購読中のジョブ（画面で詳細を表示中）と、`running` のジョブ（トレイのツールチップに最新メッセージを出すため）。
+- 読むきっかけは、`jobs/*.log` の変更通知と、定期スキャン（取りこぼし対策）の2つ。
 - ジョブごとに、読んだ位置（バイト）を覚えておき、差分だけを読む。
 - ファイルが前回より小さくなっていたら、作り直されたとみなして先頭から読み直す。ファイルが消えたら、読んだ位置を捨てる。
 - UTF-8のマルチバイト文字が読み込み単位の境目にかかったら、その手前で区切り、残りは次回に回す。
