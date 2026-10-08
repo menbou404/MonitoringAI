@@ -64,10 +64,11 @@ fn wait_transition(
             from: previous,
             to: next,
         } = event
+            && actual == id
+            && previous == from
+            && next == to
         {
-            if actual == id && previous == from && next == to {
-                return;
-            }
+            return;
         }
     }
 }

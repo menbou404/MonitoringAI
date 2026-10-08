@@ -1,8 +1,39 @@
 [workspace]
 resolver = "3"
-members = ["crates/monitor-core"]
+members = [".", "crates/monitor-core"]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.98"
 license = "MIT"
+
+[package]
+name = "monitoringai"
+version = "0.1.0"
+description = "Tray app that shows what Codex is doing"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# The `_lib` suffix avoids a name clash with the binary on Windows (cargo#8519).
+name = "monitoringai_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+monitor-core = { path = "crates/monitor-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-notification = "2.5"
+tauri-plugin-single-instance = "2.4.5"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

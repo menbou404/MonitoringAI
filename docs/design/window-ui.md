@@ -55,7 +55,7 @@
 | `jobs-changed` | 変更されたジョブ（`JobSummary[]`）と削除されたID |
 | `log-appended` | `{ id, text, start, end }`。購読中のジョブだけに送る |
 | `health-changed` | `get_health` と同じ内容 |
-| `focus-job` | `{ id }`。トレイのメニューや通知から開かれたときに、表示するジョブを指定する |
+| `focus-job` | `{ id }`。トレイのメニューから開かれたときに、表示するジョブを指定する |
 
 ウィンドウは開くたびに作り直されるので、画面は起動時に必ず `list_jobs` と `get_health` で全体を取り直す。
 

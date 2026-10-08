@@ -3,7 +3,7 @@
 - 最終更新: 2026-10-04
 - この文書には全体像と共通の取り決めだけを書く。機能ごとの詳細は [docs/design/](design/) の各文書に、技術選定の理由は [docs/adr/](adr/README.md) に書く。
 
-アプリ名「MonitoringAI」は仮の名前。
+アプリ名は **MonitoringAI**、アプリIDは **`com.menbou404.monitoringai`**。
 
 ---
 
@@ -105,7 +105,7 @@ MonitoringAI/
 
 ### 5.4 主な依存
 
-- Rust: `tauri` 2（`tray-icon` 機能）、`tauri-plugin-notification`、`tauri-plugin-single-instance`、`tauri-plugin-autostart`、`notify` + `notify-debouncer-full`、`serde` / `serde_json`、`windows`、`tracing`、`ts-rs`（型の自動生成）
+- Rust: `tauri` 2（`tray-icon` / `image-png` 機能）、`tauri-plugin-notification`、`tauri-plugin-single-instance`、`tauri-plugin-autostart`、`notify` + `notify-debouncer-full`、`serde` / `serde_json`、`chrono`、`thiserror`、`windows`、`tracing` / `tracing-subscriber` / `tracing-appender`、`ts-rs`（型の自動生成）
 - 画面: React、TypeScript、Vite、仮想スクロールのライブラリ1つ、Vitest
 
 これ以外の依存を足すときは、理由を設計書に書く。
@@ -125,7 +125,7 @@ MonitoringAI/
 
 1. 2つのワークスペースで同時に動いているジョブが一覧に出る。フェーズと経過時間が、ログの進み具合から**2秒以内**に追従する。
 2. 詳細でログがリアルタイムに追記される。
-3. 完了・失敗の通知が出て、クリックするとそのジョブが表示される。
+3. 完了・失敗の通知が出る。トレイのメニューから実行中のジョブを選ぶと、ウィンドウが開く。
 4. Codexが動いている間、Claude Codeのプロセスを強制終了すると、5〜10秒以内に `Orphaned` になる。
 5. トレイアイコンが [トレイと通知 1](design/tray-notification.md#1-トレイアイコン) のとおりに変わる。
 6. **常駐時のメモリ**: ウィンドウを閉じた状態で、本アプリのプロセスの合計（WebView2の子プロセスを含む）を測り、[ADR-0001](adr/0001-app-framework.md) に記録する。目標はプライベートワーキングセットで **30MB以下**。ウィンドウを閉じたら WebView2 のプロセスが残らないことも確かめる。
@@ -136,10 +136,10 @@ MonitoringAI/
 
 | 項目 | 内容 |
 |---|---|
-| アプリ名・アプリID | 仮名「MonitoringAI」。アイコンも未定 |
 | `sessionId` からClaudeのセッション名を出す | Claude Code CLIの記録（`~/.claude/projects/*/<sessionId>.jsonl`）との対応は取れそうだが、Desktop版でのセッション名の取り方は未調査 |
 | ジョブの操作 | キャンセルを付けるなら、プラグインの `codex-companion.mjs cancel <jobId>` を呼ぶのが安全。読み取り専用の原則を崩すので、段階1の後に判断する |
 | 補助データの利用 | Codexの実行記録からのトークン数などの表示（[データソース仕様 9](design/data-source.md#9-補助データ段階1では使わない)） |
 | 配布 | インストーラー（NSIS / MSI）を作るか、署名をどうするか |
+| 通知のクリックでジョブを開く | `tauri-plugin-notification` はデスクトップでクリックを受け取れない。WinRTのトースト通知を直接使えば実現できる見込みだが、アプリIDの登録（インストール）が前提になる（[トレイと通知 4](design/tray-notification.md#4-通知)） |
 
 機能ごとの未決事項は、各文書の「未決事項」の節に書く。
