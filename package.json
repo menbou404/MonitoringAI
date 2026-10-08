@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "typecheck": "tsc -b --noEmit",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bindings": "cargo test --offline --manifest-path src-tauri/Cargo.toml --workspace --features ts export_bindings"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.13",

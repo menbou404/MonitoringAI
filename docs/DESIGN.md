@@ -105,7 +105,7 @@ MonitoringAI/
 
 ### 5.4 主な依存
 
-- Rust: `tauri` 2（`tray-icon` / `image-png` 機能）、`tauri-plugin-notification`、`tauri-plugin-single-instance`、`tauri-plugin-autostart`、`notify` + `notify-debouncer-full`、`serde` / `serde_json`、`chrono`、`thiserror`、`windows`、`tracing` / `tracing-subscriber` / `tracing-appender`、`ts-rs`（型の自動生成）
+- Rust: `tauri` 2（`tray-icon` / `image-png` 機能）、`tauri-plugin-notification`、`tauri-plugin-single-instance`、`tauri-plugin-autostart`、`tauri-plugin-opener`、`notify` + `notify-debouncer-full`、`serde` / `serde_json`、`chrono`、`thiserror`、`windows`、`tracing` / `tracing-subscriber` / `tracing-appender`、`ts-rs`（型の自動生成）
 - 画面: React、TypeScript、Vite、仮想スクロールのライブラリ1つ、Vitest
 
 これ以外の依存を足すときは、理由を設計書に書く。

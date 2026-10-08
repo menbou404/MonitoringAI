@@ -20,6 +20,11 @@ license.workspace = true
 name = "monitoringai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+# Export TypeScript bindings for the UI (docs/design/window-ui.md#5-型)
+ts = ["dep:ts-rs", "monitor-core/ts"]
+
 [build-dependencies]
 tauri-build = "2"
 
@@ -30,10 +35,12 @@ serde_json = "1.0.151"
 tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-notification = "2.5"
+tauri-plugin-opener = "2.7.0"
 tauri-plugin-single-instance = "2.4.5"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ts-rs = { version = "12", features = ["chrono-impl"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"

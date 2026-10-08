@@ -1,0 +1,3 @@
+[env]
+# ts-rs writes generated TypeScript bindings here (docs/design/window-ui.md#5-型).
+TS_RS_EXPORT_DIR = { value = "../src/bindings", relative = true }
