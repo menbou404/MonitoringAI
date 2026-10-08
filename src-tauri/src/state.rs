@@ -1,5 +1,6 @@
 use crate::settings::{self, Settings};
 use monitor_core::{EffectiveState, Health, JobSummary, Monitor, MonitorEvent};
+use serde::Serialize;
 use std::{collections::BTreeSet, io, path::PathBuf, sync::Mutex};
 
 pub struct AppState {
@@ -8,7 +9,44 @@ pub struct AppState {
     pub inner: Mutex<AppSnapshot>,
 }
 
+#[derive(Clone, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../src/bindings/")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct UiSnapshot {
+    #[cfg_attr(feature = "ts", ts(type = "Array<import('./JobSummary').JobSummary>"))]
+    pub jobs: Vec<JobSummary>,
+    pub unseen: Vec<String>,
+    #[cfg_attr(feature = "ts", ts(type = "import('./Health').Health"))]
+    pub health: Health,
+    #[cfg_attr(feature = "ts", ts(type = "import('./Settings').Settings"))]
+    pub settings: Settings,
+}
+
 impl AppState {
+    pub fn snapshot(&self) -> UiSnapshot {
+        let snap = self.inner.lock().expect("app state");
+        snap.ui_snapshot()
+    }
+
+    pub fn watch_log(&self, id: Option<String>) -> Result<(), String> {
+        let mut snap = self.inner.lock().expect("app state");
+        if snap.watched_log == id {
+            return Ok(());
+        }
+        let previous = snap.replace_watched_log(id.clone())?;
+        if let Some(previous) = previous {
+            self.monitor.unsubscribe_log(&previous);
+        }
+        if let Some(next) = &id {
+            self.monitor.subscribe_log(next);
+        }
+        Ok(())
+    }
+
     pub fn update_settings(&self, settings: Settings) -> io::Result<()> {
         let monitor_changed = {
             let mut snapshot = self.inner.lock().expect("app state");
@@ -31,9 +69,36 @@ pub struct AppSnapshot {
     pub health: Health,
     pub unseen: BTreeSet<String>,
     pub window_error: bool,
+    pub pending_focus: Option<String>,
+    pub watched_log: Option<String>,
 }
 
 impl AppSnapshot {
+    pub fn replace_watched_log(&mut self, id: Option<String>) -> Result<Option<String>, String> {
+        if let Some(id) = &id
+            && !self.jobs.iter().any(|job| &job.id == id)
+        {
+            return Err("ジョブが見つかりません".into());
+        }
+        if self.watched_log == id {
+            return Ok(None);
+        }
+        Ok(std::mem::replace(&mut self.watched_log, id))
+    }
+
+    pub fn ui_snapshot(&self) -> UiSnapshot {
+        UiSnapshot {
+            jobs: self.jobs.clone(),
+            unseen: self.unseen.iter().cloned().collect(),
+            health: self.health.clone(),
+            settings: self.settings.clone(),
+        }
+    }
+
+    pub fn take_pending_focus(&mut self) -> Option<String> {
+        self.pending_focus.take()
+    }
+
     pub fn apply(&mut self, event: &MonitorEvent, jobs: Vec<JobSummary>) {
         match event {
             MonitorEvent::StateTransition { id, to, .. } => {
@@ -49,6 +114,9 @@ impl AppSnapshot {
             MonitorEvent::JobsChanged { removed, .. } => {
                 for id in removed {
                     self.unseen.remove(id);
+                    if self.watched_log.as_deref() == Some(id) {
+                        self.watched_log = None;
+                    }
                 }
             }
             MonitorEvent::HealthChanged(health) => self.health = health.clone(),
@@ -91,6 +159,8 @@ mod tests {
             },
             unseen: BTreeSet::new(),
             window_error: false,
+            pending_focus: None,
+            watched_log: None,
         };
         state.apply(
             &MonitorEvent::StateTransition {
@@ -112,5 +182,62 @@ mod tests {
             vec![],
         );
         assert!(state.unseen.is_empty());
+    }
+    #[test]
+    fn pending_focus_is_taken_once() {
+        let mut state = AppSnapshot {
+            settings: Settings::default(),
+            jobs: vec![],
+            health: Health {
+                plugin_version: None,
+                version_supported: false,
+                watched_roots: vec![],
+                last_error: None,
+            },
+            unseen: BTreeSet::new(),
+            window_error: false,
+            pending_focus: Some("job-a".into()),
+            watched_log: None,
+        };
+        assert_eq!(state.take_pending_focus().as_deref(), Some("job-a"));
+        assert_eq!(state.take_pending_focus(), None);
+        state.watched_log = Some("old".into());
+        assert_eq!(
+            state.replace_watched_log(None).unwrap().as_deref(),
+            Some("old")
+        );
+        assert!(state.watched_log.is_none());
+        assert!(state.replace_watched_log(Some("unknown".into())).is_err());
+        state.jobs.push(JobSummary {
+            id: "next".into(),
+            workspace_root: None,
+            workspace_name: None,
+            kind: None,
+            kind_label: None,
+            title: None,
+            summary: None,
+            status: "running".into(),
+            phase: None,
+            effective_state: EffectiveState::Running,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            updated_at: None,
+            pid: None,
+            thread_id: None,
+            write: None,
+            session_id: None,
+            latest_message: None,
+            log_modified_at: None,
+        });
+        assert_eq!(
+            state.replace_watched_log(Some("next".into())).unwrap(),
+            None
+        );
+        assert_eq!(state.watched_log.as_deref(), Some("next"));
+        assert_eq!(
+            state.replace_watched_log(None).unwrap().as_deref(),
+            Some("next")
+        );
     }
 }

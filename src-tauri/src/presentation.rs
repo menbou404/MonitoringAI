@@ -45,11 +45,11 @@ pub fn phase_name(job: &JobSummary) -> &str {
     match job.effective_state {
         E::Quiet => "応答なし？",
         E::Queued => "待機中",
-        E::Orphaned => "停止の可能性",
+        E::Orphaned => "停止した可能性",
         E::Completed => "完了",
         E::Failed => "失敗",
         E::Cancelled => "キャンセル",
-        E::Unknown => "不明",
+        E::Unknown => &job.status,
         E::Running => match job.phase.as_deref() {
             Some("queued") => "待機中",
             Some("starting") => "開始中",
@@ -172,8 +172,13 @@ pub fn menu_rows(
         .map(|j| MenuRow::Job {
             id: j.id.clone(),
             label: format!(
-                "{} — {} — {}",
+                "{}{} — {} — {}",
                 workspace(j),
+                j.summary
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| format!("「{}」", clip_menu_summary(s)))
+                    .unwrap_or_default(),
                 phase_name(j),
                 elapsed_job(j, now_ms)
             ),
@@ -197,6 +202,20 @@ pub fn menu_rows(
         MenuRow::Exit,
     ]);
     rows
+}
+
+fn clip_menu_summary(value: &str) -> String {
+    let flattened = value
+        .chars()
+        .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+        .collect::<String>();
+    let mut chars = flattened.trim().chars();
+    let text = chars.by_ref().take(20).collect::<String>();
+    if chars.next().is_some() {
+        format!("{text}…")
+    } else {
+        text
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,6 +344,24 @@ mod tests {
         assert!(rows.contains(&MenuRow::Disabled("ほか 2件".into())));
         assert_eq!(rows[6], MenuRow::Separator);
         assert!(rows.contains(&MenuRow::Warning("⚠ error".into())));
+    }
+    #[test]
+    fn same_workspace_jobs_have_distinct_request_in_menu() {
+        let mut first = job("one", E::Running);
+        first.workspace_name = Some("shared".into());
+        first.summary = Some("first task\nwith details".into());
+        let mut second = job("two", E::Running);
+        second.workspace_name = Some("shared".into());
+        second.summary = Some("second task".into());
+        let rows = menu_rows(&[first, second], None, 0, true, false);
+        assert!(
+            matches!(&rows[0], MenuRow::Job { label, .. } if label.contains("first task with deta…"))
+        );
+        assert!(matches!(&rows[1], MenuRow::Job { label, .. } if label.contains("second task")));
+        assert_eq!(
+            clip_menu_summary(&"あ".repeat(21)),
+            format!("{}…", "あ".repeat(20))
+        );
     }
     #[test]
     fn notification_matrix_and_controls() {

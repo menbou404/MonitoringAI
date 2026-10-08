@@ -1,6 +1,7 @@
 //! MonitoringAI's resident Tauri shell.
 
 mod bridge;
+mod commands;
 mod logging;
 mod notify;
 mod presentation;
@@ -22,6 +23,17 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_snapshot,
+            commands::get_job,
+            commands::read_log,
+            commands::watch_log,
+            commands::mark_seen,
+            commands::open_path,
+            commands::set_settings,
+            commands::take_pending_focus,
+        ])
         .setup(|app| {
             let handle = app.handle();
             let guard = logging::init(&handle.path().app_log_dir()?)?;
@@ -39,6 +51,8 @@ pub fn run() {
                 unseen: BTreeSet::new(),
                 settings,
                 window_error: false,
+                pending_focus: None,
+                watched_log: None,
             };
             app.manage(AppState {
                 monitor,
@@ -50,6 +64,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
+                let _ = window.app_handle().state::<AppState>().watch_log(None);
+            }
             if window.label() == "main"
                 && matches!(event, WindowEvent::CloseRequested { .. })
                 && let Some(webview) = window.app_handle().get_webview_window("main")

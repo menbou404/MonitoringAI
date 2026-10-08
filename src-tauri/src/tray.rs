@@ -5,7 +5,7 @@ use crate::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
-    AppHandle, Manager,
+    AppHandle, Emitter, Manager,
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -150,6 +150,8 @@ fn on_menu(app: &AppHandle, event: tauri::menu::MenuEvent) {
             if let Err(error) = state.update_settings(settings) {
                 tracing::warn!(%error,"settings save failed");
             }
+            let changed = state.inner.lock().expect("app state").settings.clone();
+            let _ = app.emit_to("main", "settings-changed", changed);
             refresh(app);
         }
         "autostart" => {
@@ -172,19 +174,31 @@ fn on_menu(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     if let Err(error) = state.update_settings(settings) {
                         tracing::warn!(%error,"settings save failed");
                     }
+                    let changed = state.inner.lock().expect("app state").settings.clone();
+                    let _ = app.emit_to("main", "settings-changed", changed);
                 }
                 Err(error) => tracing::warn!(%error,"autostart query failed"),
             }
             refresh(app);
         }
         id if id.starts_with("job:") => {
+            let job_id = id[4..].to_owned();
+            let was_open = app.get_webview_window("main").is_some();
             app.state::<AppState>()
                 .inner
                 .lock()
                 .expect("app state")
-                .mark_seen(&id[4..]);
-            refresh(app);
+                .pending_focus = Some(job_id.clone());
+            crate::commands::mark_seen(app.clone(), job_id.clone());
             window::open(app);
+            if was_open && app.get_webview_window("main").is_some() {
+                let _ = app.emit_to("main", "focus-job", serde_json::json!({ "id": job_id }));
+                app.state::<AppState>()
+                    .inner
+                    .lock()
+                    .expect("app state")
+                    .pending_focus = None;
+            }
         }
         _ => {}
     }

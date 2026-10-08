@@ -2,7 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
     pub id: String,
@@ -29,7 +33,11 @@ pub struct Job {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRequest {
     pub prompt: Option<String>,
@@ -38,7 +46,11 @@ pub struct JobRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Broker {
     pub pid: Option<u32>,
@@ -46,7 +58,11 @@ pub struct Broker {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub enum EffectiveState {
     Queued,
@@ -60,7 +76,11 @@ pub enum EffectiveState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSummary {
     pub id: String,
@@ -86,7 +106,11 @@ pub struct JobSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct JobDetail {
     #[serde(flatten)]
@@ -102,17 +126,27 @@ pub struct JobDetail {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct LogChunk {
     pub text: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub start: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub end: u64,
     pub truncated_before: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Health {
     pub plugin_version: Option<String>,
@@ -122,7 +156,11 @@ pub struct Health {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../../src/bindings/")
+)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum MonitorEvent {
     JobsChanged {
@@ -137,7 +175,9 @@ pub enum MonitorEvent {
     LogAppended {
         id: String,
         text: String,
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
         start: u64,
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
         end: u64,
     },
     HealthChanged(Health),

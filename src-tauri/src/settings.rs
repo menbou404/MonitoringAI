@@ -6,6 +6,11 @@ use std::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../src/bindings/")
+)]
 #[serde(default)]
 pub struct NotificationSettings {
     pub enabled: bool,
@@ -30,6 +35,11 @@ impl Default for NotificationSettings {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../src/bindings/")
+)]
 pub struct WindowPlacement {
     pub x: i32,
     pub y: i32,
@@ -38,11 +48,19 @@ pub struct WindowPlacement {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../src/bindings/")
+)]
 #[serde(default)]
 pub struct Settings {
     pub notifications: NotificationSettings,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub quiet_minutes: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub recent_hours: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub recent_limit: usize,
     pub extra_state_roots: Vec<PathBuf>,
     pub autostart: bool,
@@ -64,6 +82,26 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=120).contains(&self.quiet_minutes) {
+            return Err("応答なしまでの分数は1〜120にしてください".into());
+        }
+        if !(1..=168).contains(&self.recent_hours) {
+            return Err("最近の期間は1〜168時間にしてください".into());
+        }
+        if !(10..=500).contains(&self.recent_limit) {
+            return Err("最近の件数は10〜500件にしてください".into());
+        }
+        if self
+            .extra_state_roots
+            .iter()
+            .any(|path| !path.is_absolute())
+        {
+            return Err("追加の状態ルートには絶対パスを指定してください".into());
+        }
+        Ok(())
+    }
+
     pub fn monitor_config(&self) -> monitor_core::MonitorConfig {
         monitor_core::MonitorConfig {
             quiet_after: Duration::from_secs(self.quiet_minutes.saturating_mul(60)),
@@ -139,5 +177,24 @@ mod tests {
         save(&path, &changed).unwrap();
         assert_eq!(load(&path).unwrap(), changed);
         assert!(!path.with_extension("json.tmp").exists());
+    }
+    #[test]
+    fn rejects_out_of_range_and_relative_roots() {
+        let mut s = Settings {
+            quiet_minutes: 0,
+            ..Default::default()
+        };
+        assert!(s.validate().is_err());
+        s.quiet_minutes = 121;
+        assert!(s.validate().is_err());
+        s.quiet_minutes = 10;
+        s.recent_hours = 169;
+        assert!(s.validate().is_err());
+        s.recent_hours = 24;
+        s.recent_limit = 9;
+        assert!(s.validate().is_err());
+        s.recent_limit = 50;
+        s.extra_state_roots.push(PathBuf::from("relative"));
+        assert!(s.validate().is_err());
     }
 }
