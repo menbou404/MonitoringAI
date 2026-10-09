@@ -45,6 +45,9 @@ pub struct MonitorConfig {
     pub liveness_interval: Duration,
     pub debounce: Duration,
     pub initial_log_bytes: u64,
+    pub claude_projects_dir: Option<PathBuf>,
+    pub history_dir: Option<PathBuf>,
+    pub history_days: u32,
 }
 
 impl Default for MonitorConfig {
@@ -62,6 +65,11 @@ impl Default for MonitorConfig {
             liveness_interval: Duration::from_secs(5),
             debounce: Duration::from_millis(200),
             initial_log_bytes: 1024 * 1024,
+            claude_projects_dir: std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|home| home.join(".claude/projects")),
+            history_dir: None,
+            history_days: 30,
         }
     }
 }

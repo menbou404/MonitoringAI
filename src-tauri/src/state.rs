@@ -6,6 +6,7 @@ use std::{collections::BTreeSet, io, path::PathBuf, sync::Mutex};
 pub struct AppState {
     pub monitor: Monitor,
     pub settings_path: PathBuf,
+    pub history_dir: PathBuf,
     pub inner: Mutex<AppSnapshot>,
 }
 
@@ -56,7 +57,8 @@ impl AppState {
             changed
         };
         if monitor_changed {
-            self.monitor.update_config(settings.monitor_config());
+            self.monitor
+                .update_config(settings.monitor_config_with_history(self.history_dir.clone()));
         }
         settings::save(&self.settings_path, &settings)
     }
@@ -229,6 +231,11 @@ mod tests {
             session_id: None,
             latest_message: None,
             log_modified_at: None,
+            context: None,
+            previous_job_id: None,
+            archived: false,
+            archived_note: None,
+            prompt_head: None,
         });
         assert_eq!(
             state.replace_watched_log(Some("next".into())).unwrap(),

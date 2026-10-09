@@ -6,13 +6,18 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use crate::{Clock, EffectiveState, Job, JobSummary, MonitorEvent, ProcessProbe};
+use crate::{
+    Clock, EffectiveState, Job, JobContext, JobSummary, MonitorEvent, ProcessProbe,
+    history::{History, head},
+};
 
 pub(crate) struct Store {
     sources: BTreeMap<PathBuf, Vec<Job>>,
     summaries: BTreeMap<String, JobSummary>,
     paths: BTreeMap<String, PathBuf>,
     logs: BTreeMap<String, (Option<String>, Option<DateTime<Utc>>)>,
+    contexts: BTreeMap<String, JobContext>,
+    detail_seen: BTreeSet<String>,
     initialized: bool,
 }
 
@@ -23,6 +28,8 @@ impl Store {
             summaries: BTreeMap::new(),
             paths: BTreeMap::new(),
             logs: BTreeMap::new(),
+            contexts: BTreeMap::new(),
+            detail_seen: BTreeSet::new(),
             initialized: false,
         }
     }
@@ -43,6 +50,55 @@ impl Store {
     }
     pub(crate) fn summary(&self, id: &str) -> Option<&JobSummary> {
         self.summaries.get(id)
+    }
+    pub(crate) fn set_context(&mut self, id: &str, context: JobContext) {
+        self.contexts.insert(id.to_owned(), context);
+    }
+    pub(crate) fn context_jobs(&self) -> Vec<(Job, PathBuf, Option<JobContext>)> {
+        self.sources
+            .iter()
+            .flat_map(|(path, jobs)| {
+                jobs.iter().filter_map(|job| {
+                    job.session_id.as_ref()?;
+                    Some((
+                        job.clone(),
+                        path.parent()?.to_path_buf(),
+                        self.contexts.get(&job.id).cloned().or_else(|| {
+                            self.summaries.get(&job.id).and_then(|s| s.context.clone())
+                        }),
+                    ))
+                })
+            })
+            .collect()
+    }
+    pub(crate) fn detail_candidates(&self) -> Vec<(String, PathBuf)> {
+        self.sources
+            .iter()
+            .flat_map(|(source, jobs)| {
+                jobs.iter().filter_map(|job| {
+                    if !safe_id(&job.id) {
+                        return None;
+                    }
+                    let previous = self.summaries.get(&job.id);
+                    let terminal =
+                        matches!(job.status.as_str(), "completed" | "failed" | "cancelled");
+                    if self.detail_seen.contains(&job.id)
+                        && previous.is_some_and(|p| {
+                            p.prompt_head.is_some() && (!terminal || p.status == job.status)
+                        })
+                    {
+                        return None;
+                    }
+                    Some((
+                        job.id.clone(),
+                        source
+                            .parent()?
+                            .join("jobs")
+                            .join(format!("{}.json", job.id)),
+                    ))
+                })
+            })
+            .collect()
     }
     pub(crate) fn log_candidates(&self) -> Vec<(String, String, PathBuf)> {
         self.sources
@@ -79,6 +135,8 @@ impl Store {
         probe: &dyn ProcessProbe,
         clock: &dyn Clock,
         quiet_after: Duration,
+        mut history: Option<&mut History>,
+        details: &BTreeMap<String, Job>,
     ) -> Vec<MonitorEvent> {
         let mut next = BTreeMap::new();
         let mut paths = BTreeMap::new();
@@ -123,6 +181,32 @@ impl Store {
                             None => previous.and_then(|s| s.latest_message.clone()),
                         },
                         log_modified_at: log_modified,
+                        context: self.contexts.get(&job.id).cloned().or_else(|| {
+                            history
+                                .as_ref()
+                                .and_then(|h| h.get(&job.id))
+                                .and_then(|r| r.summary().context)
+                        }),
+                        previous_job_id: None,
+                        archived: false,
+                        archived_note: None,
+                        prompt_head: details
+                            .get(&job.id)
+                            .and_then(|d| {
+                                d.request
+                                    .as_ref()
+                                    .and_then(|r| r.prompt.as_deref())
+                                    .or(d.summary.as_deref())
+                            })
+                            .map(|s| head(s, 200))
+                            .or_else(|| previous.and_then(|s| s.prompt_head.clone()))
+                            .or_else(|| {
+                                job.request
+                                    .as_ref()
+                                    .and_then(|r| r.prompt.as_deref())
+                                    .or(job.summary.as_deref())
+                                    .map(|s| head(s, 200))
+                            }),
                     },
                 );
                 paths.insert(
@@ -130,6 +214,41 @@ impl Store {
                     source.parent().unwrap_or(source).to_path_buf(),
                 );
             }
+        }
+        if let Some(history) = history.as_mut() {
+            for (id, summary) in &next {
+                history.update_live(summary, details.get(id));
+            }
+            for (id, old) in &self.summaries {
+                if !old.archived && !next.contains_key(id) {
+                    history.archive(id);
+                }
+            }
+            let live: BTreeSet<_> = next.keys().cloned().collect();
+            history.maybe_cleanup(clock.now(), &live);
+            for archived in history.summaries() {
+                next.entry(archived.id.clone()).or_insert(archived);
+            }
+        }
+        let threads: Vec<_> = next
+            .values()
+            .filter_map(|s| Some((s.id.clone(), s.thread_id.clone()?, s.created_at?)))
+            .collect();
+        for summary in next.values_mut() {
+            summary.previous_job_id =
+                summary
+                    .thread_id
+                    .as_ref()
+                    .zip(summary.created_at)
+                    .and_then(|(thread, at)| {
+                        threads
+                            .iter()
+                            .filter(|(id, candidate, time)| {
+                                id != &summary.id && candidate == thread && *time < at
+                            })
+                            .max_by_key(|(_, _, time)| time)
+                            .map(|(id, _, _)| id.clone())
+                    });
         }
         let mut events = Vec::new();
         let changed: Vec<_> = next
@@ -152,7 +271,9 @@ impl Store {
                     .summaries
                     .get(id)
                     .map(|old| old.effective_state.clone());
-                if from.as_ref() != Some(&value.effective_state) {
+                if from.as_ref() != Some(&value.effective_state)
+                    && (!value.archived || from.is_some())
+                {
                     events.push(MonitorEvent::StateTransition {
                         id: id.clone(),
                         from,
@@ -164,7 +285,10 @@ impl Store {
         self.initialized = true;
         self.summaries = next;
         self.paths = paths;
-        self.logs.retain(|id, _| self.summaries.contains_key(id));
+        self.detail_seen.extend(details.keys().cloned());
+        self.detail_seen.retain(|id| self.paths.contains_key(id));
+        self.logs
+            .retain(|id, _| self.summaries.get(id).is_some_and(|s| !s.archived));
         events
     }
 }
@@ -323,14 +447,26 @@ mod tests {
         store.replace_source(path.clone(), vec![job("queued")]);
         assert!(
             store
-                .reconcile(&alive, &SystemClock, Duration::from_secs(600))
+                .reconcile(
+                    &alive,
+                    &SystemClock,
+                    Duration::from_secs(600),
+                    None,
+                    &BTreeMap::new()
+                )
                 .iter()
                 .all(|e| !matches!(e, MonitorEvent::StateTransition { .. }))
         );
         store.replace_source(path, vec![job("running")]);
         assert!(
             store
-                .reconcile(&alive, &SystemClock, Duration::from_secs(600))
+                .reconcile(
+                    &alive,
+                    &SystemClock,
+                    Duration::from_secs(600),
+                    None,
+                    &BTreeMap::new()
+                )
                 .iter()
                 .any(|e| matches!(e, MonitorEvent::StateTransition { .. }))
         );

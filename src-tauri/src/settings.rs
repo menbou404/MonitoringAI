@@ -109,6 +109,13 @@ impl Settings {
             ..Default::default()
         }
     }
+
+    pub fn monitor_config_with_history(&self, history_dir: PathBuf) -> monitor_core::MonitorConfig {
+        monitor_core::MonitorConfig {
+            history_dir: Some(history_dir),
+            ..self.monitor_config()
+        }
+    }
 }
 
 pub fn load(path: &Path) -> io::Result<Settings> {

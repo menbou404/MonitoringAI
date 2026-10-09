@@ -14,15 +14,23 @@ use crate::{
     Clock, Health, JobDetail, JobSummary, LogChunk, MonitorConfig, MonitorEvent, ProcessProbe,
     SystemClock, SystemProcessProbe,
     discovery::state_files,
+    history::History,
     log_tail::{LogTail, latest_message, modified_at},
     parser::{read_installed_version, read_job, read_state},
     store::{Store, safe_id},
     watcher::{RootWatcher, watch_targets},
 };
 
+struct ContextRequest {
+    job: crate::Job,
+    directory: PathBuf,
+    projects: PathBuf,
+    previous: Option<crate::JobContext>,
+}
+
 enum Command {
     Stop,
-    Update(MonitorConfig),
+    Update(Box<MonitorConfig>),
     Subscribe(String),
     Unsubscribe(String),
 }
@@ -31,6 +39,7 @@ pub struct Monitor {
     store: Arc<Mutex<Store>>,
     health: Arc<Mutex<Health>>,
     details: Arc<Mutex<BTreeMap<String, crate::Job>>>,
+    history: Arc<Mutex<Option<History>>>,
     initial_log_bytes: AtomicU64,
     command: Sender<Command>,
     thread: Option<JoinHandle<()>>,
@@ -56,19 +65,35 @@ impl Monitor {
             last_error: None,
         }));
         let details = Arc::new(Mutex::new(BTreeMap::new()));
+        let history = Arc::new(Mutex::new(
+            config
+                .history_dir
+                .clone()
+                .map(|dir| History::open(dir, config.history_days, clock.now())),
+        ));
         let (event_tx, event_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let worker_store = Arc::clone(&store);
         let worker_health = Arc::clone(&health);
+        let worker_history = Arc::clone(&history);
         let thread = thread::spawn(move || {
-            Worker::new(config, worker_store, worker_health, event_tx, probe, clock)
-                .run(command_rx);
+            Worker::new(
+                config,
+                worker_store,
+                worker_health,
+                worker_history,
+                event_tx,
+                probe,
+                clock,
+            )
+            .run(command_rx);
         });
         (
             Self {
                 store,
                 health,
                 details,
+                history,
                 initial_log_bytes,
                 command: command_tx,
                 thread: Some(thread),
@@ -89,8 +114,21 @@ impl Monitor {
             let store = self.store.lock().expect("store lock");
             (
                 store.summary(id)?.clone(),
-                store.path_for(id)?.to_path_buf(),
+                store.path_for(id).map(PathBuf::from),
             )
+        };
+        let Some(directory) = directory else {
+            return self
+                .history
+                .lock()
+                .expect("history lock")
+                .as_ref()?
+                .get(id)
+                .map(|r| {
+                    let mut detail = r.detail();
+                    detail.summary = summary;
+                    detail
+                });
         };
         let path = directory.join("jobs").join(format!("{id}.json"));
         let job = match read_job(&path) {
@@ -169,7 +207,7 @@ impl Monitor {
     pub fn update_config(&self, config: MonitorConfig) {
         self.initial_log_bytes
             .store(config.initial_log_bytes, Ordering::Relaxed);
-        let _ = self.command.send(Command::Update(config));
+        let _ = self.command.send(Command::Update(Box::new(config)));
     }
 }
 
@@ -186,6 +224,7 @@ struct Worker {
     config: MonitorConfig,
     store: Arc<Mutex<Store>>,
     health: Arc<Mutex<Health>>,
+    history: Arc<Mutex<Option<History>>>,
     events: Sender<MonitorEvent>,
     probe: Arc<dyn ProcessProbe>,
     clock: Arc<dyn Clock>,
@@ -203,6 +242,7 @@ impl Worker {
         config: MonitorConfig,
         store: Arc<Mutex<Store>>,
         health: Arc<Mutex<Health>>,
+        history: Arc<Mutex<Option<History>>>,
         events: Sender<MonitorEvent>,
         probe: Arc<dyn ProcessProbe>,
         clock: Arc<dyn Clock>,
@@ -211,6 +251,7 @@ impl Worker {
             config,
             store,
             health,
+            history,
             events,
             probe,
             clock,
@@ -225,27 +266,76 @@ impl Worker {
     }
 
     fn run(mut self, commands: Receiver<Command>) {
+        let (context_tx, context_rx) = mpsc::channel::<ContextRequest>();
+        let (result_tx, result_rx) = mpsc::channel();
+        let context_thread = thread::spawn(move || {
+            let mut resolver = crate::context::Resolver::default();
+            while let Ok(request) = context_rx.recv() {
+                let id = request.job.id.clone();
+                let result = if let Some(mut previous) =
+                    request.previous.filter(|c| c.requester.is_some())
+                {
+                    previous.session_title = resolver
+                        .refresh_title(&request.projects, &previous.session_id)
+                        .or(previous.session_title);
+                    Some(previous)
+                } else {
+                    let prompt = if safe_id(&id) {
+                        read_job(&request.directory.join("jobs").join(format!("{id}.json")))
+                            .ok()
+                            .and_then(|j| j.request.and_then(|r| r.prompt).or(j.summary))
+                    } else {
+                        None
+                    };
+                    let prompt = prompt.or_else(|| {
+                        request
+                            .job
+                            .request
+                            .as_ref()
+                            .and_then(|r| r.prompt.clone())
+                            .or(request.job.summary.clone())
+                    });
+                    resolver.resolve(&request.projects, &request.job, prompt.as_deref())
+                };
+                if let Some(context) = result {
+                    let _ = result_tx.send((id, context));
+                }
+            }
+        });
+        let mut pending = BTreeSet::new();
+        let mut attempted = BTreeSet::new();
         let (wake_tx, wake_rx) = mpsc::channel();
         let mut targets = watch_targets(&self.config.roots());
         let mut watcher = self.watch(wake_tx.clone());
         self.scan();
+        self.queue_context(&context_tx, &mut pending, &mut attempted);
         let mut rescan = Instant::now();
         let mut liveness = Instant::now();
         loop {
             match commands.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Ok(Command::Update(config)) => {
-                    self.config = config;
+                    if self.config.history_dir != config.history_dir
+                        || self.config.history_days != config.history_days
+                    {
+                        *self.history.lock().expect("history lock") = config
+                            .history_dir
+                            .clone()
+                            .map(|dir| History::open(dir, config.history_days, self.clock.now()));
+                    }
+                    self.config = *config;
                     self.stamps.clear();
                     targets = watch_targets(&self.config.roots());
                     watcher = self.watch(wake_tx.clone());
                     self.scan();
+                    self.queue_context(&context_tx, &mut pending, &mut attempted);
                     rescan = Instant::now();
                     liveness = Instant::now();
                 }
                 Ok(Command::Subscribe(id)) => {
                     self.subscribed.insert(id);
                     self.scan();
+                    self.queue_context(&context_tx, &mut pending, &mut attempted);
                 }
                 Ok(Command::Unsubscribe(id)) => {
                     self.subscribed.remove(&id);
@@ -253,11 +343,35 @@ impl Worker {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             let mut woke = false;
+            let mut context_changed = false;
+            while let Ok((id, context)) = result_rx.try_recv() {
+                pending.remove(&id);
+                let mut store = self.store.lock().expect("store lock");
+                if store
+                    .summary(&id)
+                    .is_some_and(|s| s.context.as_ref() != Some(&context))
+                {
+                    if store.summary(&id).is_some_and(|s| s.archived) {
+                        drop(store);
+                        if let Some(history) = self.history.lock().expect("history lock").as_mut() {
+                            history.set_context(&id, context);
+                            history.flush();
+                        }
+                    } else {
+                        store.set_context(&id, context);
+                    }
+                    context_changed = true;
+                }
+            }
+            if context_changed {
+                self.reconcile();
+            }
             while wake_rx.try_recv().is_ok() {
                 woke = true;
             }
             if woke || rescan.elapsed() >= self.config.rescan_interval {
                 self.scan();
+                self.queue_context(&context_tx, &mut pending, &mut attempted);
                 rescan = Instant::now();
                 let current_targets = watch_targets(&self.config.roots());
                 if current_targets != targets || watcher.is_none() {
@@ -270,6 +384,46 @@ impl Worker {
             }
         }
         drop(watcher);
+        drop(context_tx);
+        let _ = context_thread.join();
+    }
+
+    fn queue_context(
+        &self,
+        tx: &Sender<ContextRequest>,
+        pending: &mut BTreeSet<String>,
+        attempted: &mut BTreeSet<String>,
+    ) {
+        let Some(projects) = &self.config.claude_projects_dir else {
+            return;
+        };
+        let jobs = self.store.lock().expect("store lock").context_jobs();
+        let live: BTreeSet<_> = jobs.iter().map(|(job, _, _)| job.id.clone()).collect();
+        attempted.retain(|id| live.contains(id));
+        for (job, directory, previous) in jobs {
+            if pending.contains(&job.id) {
+                continue;
+            }
+            if attempted.contains(&job.id)
+                && previous.as_ref().is_none_or(|c| c.requester.is_none())
+                && matches!(job.status.as_str(), "completed" | "failed" | "cancelled")
+                && job
+                    .completed_at
+                    .or(job.updated_at)
+                    .or(job.created_at)
+                    .is_some_and(|at| self.clock.now() - at > chrono::Duration::minutes(10))
+            {
+                continue;
+            }
+            attempted.insert(job.id.clone());
+            pending.insert(job.id.clone());
+            let _ = tx.send(ContextRequest {
+                job,
+                directory,
+                projects: projects.clone(),
+                previous,
+            });
+        }
     }
 
     fn watch(&mut self, wake: Sender<()>) -> Option<RootWatcher> {
@@ -384,11 +538,27 @@ impl Worker {
     }
 
     fn reconcile(&self) {
+        let candidates = self.store.lock().expect("store lock").detail_candidates();
+        let details: BTreeMap<_, _> = candidates
+            .into_iter()
+            .filter_map(|(id, path)| {
+                read_job(&path)
+                    .ok()
+                    .filter(|job| job.id == id)
+                    .map(|job| (id, job))
+            })
+            .collect();
+        let mut history = self.history.lock().expect("history lock");
         let events = self.store.lock().expect("store lock").reconcile(
             self.probe.as_ref(),
             self.clock.as_ref(),
             self.config.quiet_after,
+            history.as_mut(),
+            &details,
         );
+        if let Some(history) = history.as_mut() {
+            history.flush();
+        }
         for event in events {
             let _ = self.events.send(event);
         }

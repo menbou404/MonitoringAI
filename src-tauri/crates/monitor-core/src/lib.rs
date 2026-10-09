@@ -1,6 +1,8 @@
 //! Read-only monitoring of codex-plugin-cc state files.
 
+mod context;
 mod discovery;
+mod history;
 mod liveness;
 mod log_tail;
 mod model;

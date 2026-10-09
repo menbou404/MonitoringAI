@@ -468,3 +468,334 @@ fn snapshot_remains_responsive_during_json_retry() {
         thread::sleep(Duration::from_millis(30));
     }
 }
+
+#[test]
+fn disappearing_running_job_becomes_archived_and_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let workspace = root.join("fiction-1");
+    fs::create_dir_all(workspace.join("jobs")).unwrap();
+    let state = workspace.join("state.json");
+    let created = Utc::now().to_rfc3339();
+    write_state(
+        &state,
+        json!([{"id":"task-archived","status":"running","pid":42,
+        "createdAt":created,"threadId":"thread-one","sessionId":"session-one","summary":"fictional request"}]),
+    );
+    fs::write(
+        workspace.join("jobs/task-archived.json"),
+        json!({"id":"task-archived","status":"running",
+        "request":{"prompt":"fictional private request"}})
+        .to_string(),
+    )
+    .unwrap();
+    let mut config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: None,
+        history_dir: Some(dir.path().join("history")),
+        ..MonitorConfig::default()
+    };
+    config.rescan_interval = Duration::from_millis(100);
+    let (monitor, events) = Monitor::start_with(config.clone(), Arc::new(Alive), Arc::new(Now));
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .any(|j| j.id == "task-archived" && !j.archived)
+    });
+    wait_until(|| dir.path().join("history/task-archived.json").is_file());
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("history/task-archived.json")).unwrap())
+            .unwrap();
+    assert_eq!(json["promptHead"], "fictional private request");
+    assert!(json.get("log").is_none());
+    write_state(&state, json!([]));
+    wait_until(|| {
+        monitor.snapshot().iter().any(|j| {
+            j.id == "task-archived" && j.archived && j.effective_state == EffectiveState::Cancelled
+        })
+    });
+    let seen: Vec<_> = events.try_iter().collect();
+    assert!(seen.iter().any(|event| matches!(event, MonitorEvent::JobsChanged { changed, removed } if removed.is_empty() && changed.iter().any(|j| j.id == "task-archived" && j.archived))));
+    assert!(seen.iter().any(|event| matches!(event, MonitorEvent::StateTransition { id, to: EffectiveState::Cancelled, .. } if id == "task-archived")));
+    assert_eq!(
+        monitor
+            .job_detail("task-archived")
+            .unwrap()
+            .prompt
+            .as_deref(),
+        Some("fictional private request")
+    );
+    assert!(monitor.read_log("task-archived", None).unwrap().is_none());
+    drop(monitor);
+    let (restarted, _events) = Monitor::start_with(config, Arc::new(Alive), Arc::new(Now));
+    wait_until(|| {
+        restarted
+            .snapshot()
+            .iter()
+            .any(|j| j.id == "task-archived" && j.archived)
+    });
+}
+
+#[test]
+fn three_resumed_jobs_link_across_history_and_workspaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let one = root.join("workspace-one");
+    let two = root.join("workspace-two");
+    fs::create_dir_all(&one).unwrap();
+    fs::create_dir_all(&two).unwrap();
+    let base = Utc::now() - chrono::Duration::minutes(3);
+    write_state(
+        &one.join("state.json"),
+        json!([
+        {"id":"task-one","status":"completed","createdAt":base.to_rfc3339(),"threadId":"thread-shared"},
+        {"id":"task-two","status":"completed","createdAt":(base + chrono::Duration::minutes(1)).to_rfc3339(),"threadId":"thread-shared"}]),
+    );
+    write_state(
+        &two.join("state.json"),
+        json!([{"id":"task-three","status":"running","pid":42,
+        "createdAt":(base + chrono::Duration::minutes(2)).to_rfc3339(),"threadId":"thread-shared"}]),
+    );
+    let mut config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: None,
+        history_dir: Some(dir.path().join("history")),
+        ..MonitorConfig::default()
+    };
+    config.rescan_interval = Duration::from_millis(100);
+    let (monitor, _events) = Monitor::start_with(config, Arc::new(Alive), Arc::new(Now));
+    wait_until(|| monitor.snapshot().len() == 3);
+    let jobs = monitor.snapshot();
+    assert_eq!(
+        jobs.iter()
+            .find(|j| j.id == "task-one")
+            .unwrap()
+            .previous_job_id,
+        None
+    );
+    assert_eq!(
+        jobs.iter()
+            .find(|j| j.id == "task-two")
+            .unwrap()
+            .previous_job_id
+            .as_deref(),
+        Some("task-one")
+    );
+    assert_eq!(
+        jobs.iter()
+            .find(|j| j.id == "task-three")
+            .unwrap()
+            .previous_job_id
+            .as_deref(),
+        Some("task-two")
+    );
+    write_state(&one.join("state.json"), json!([]));
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .find(|j| j.id == "task-two")
+            .is_some_and(|j| j.archived)
+    });
+    assert_eq!(
+        monitor
+            .snapshot()
+            .iter()
+            .find(|j| j.id == "task-three")
+            .unwrap()
+            .previous_job_id
+            .as_deref(),
+        Some("task-two")
+    );
+}
+
+#[test]
+fn context_worker_updates_snapshot_and_history_without_retaining_transcript_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let work = root.join("fiction-work");
+    fs::create_dir_all(work.join("jobs")).unwrap();
+    let project = dir.path().join("projects/fiction-project");
+    let agents = project.join("session-one/subagents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(
+        project.join("session-one.jsonl"),
+        serde_json::json!({"type":"custom-title","customTitle":"架空の会話"}).to_string(),
+    )
+    .unwrap();
+    fs::write(agents.join("agent-one.jsonl"), serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"task-context fictional private transcript content"}]}}).to_string()).unwrap();
+    fs::write(agents.join("agent-one.meta.json"), serde_json::json!({"description":"架空の依頼の説明","agentType":"codex:codex-rescue","spawnDepth":1,"toolUseId":"call-one","ignored":"fictional private metadata"}).to_string()).unwrap();
+    let created = Utc::now().to_rfc3339();
+    write_state(
+        &work.join("state.json"),
+        json!([{"id":"task-context","status":"completed","sessionId":"session-one",
+        "createdAt":created,"summary":"fictional request"}]),
+    );
+    fs::write(
+        work.join("jobs/task-context.json"),
+        json!({"id":"task-context","status":"completed",
+        "request":{"prompt":"fictional request"}})
+        .to_string(),
+    )
+    .unwrap();
+    let mut config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: Some(dir.path().join("projects")),
+        history_dir: Some(dir.path().join("history")),
+        ..MonitorConfig::default()
+    };
+    config.rescan_interval = Duration::from_millis(100);
+    let (monitor, _events) = Monitor::start_with(config, Arc::new(Alive), Arc::new(Now));
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .find(|j| j.id == "task-context")
+            .and_then(|j| j.context.as_ref())
+            .and_then(|c| c.requester.as_ref())
+            .is_some()
+    });
+    let context = monitor
+        .snapshot()
+        .into_iter()
+        .find(|j| j.id == "task-context")
+        .unwrap()
+        .context
+        .unwrap();
+    assert_eq!(context.session_title.as_deref(), Some("架空の会話"));
+    assert_eq!(
+        context.requester.unwrap().description.as_deref(),
+        Some("架空の依頼の説明")
+    );
+    let saved_path = dir.path().join("history/task-context.json");
+    wait_until(|| {
+        fs::read_to_string(&saved_path).is_ok_and(|text| text.contains("架空の依頼の説明"))
+    });
+    let saved = fs::read_to_string(saved_path).unwrap();
+    assert!(saved.contains("架空の依頼の説明"));
+    assert!(!saved.contains("fictional private transcript content"));
+    assert!(!saved.contains("fictional private metadata"));
+}
+
+#[test]
+fn old_completed_job_is_matched_on_initial_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let workspace = root.join("fiction-workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let project = dir.path().join("projects/fiction-project");
+    let agents = project.join("session-old/subagents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(project.join("session-old.jsonl"), "").unwrap();
+    fs::write(
+        agents.join("agent-old.jsonl"),
+        serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"fictional result for task-old"}]}}).to_string(),
+    ).unwrap();
+    fs::write(
+        agents.join("agent-old.meta.json"),
+        serde_json::json!({"description":"古い架空の依頼","agentType":"codex:codex-rescue","spawnDepth":1}).to_string(),
+    ).unwrap();
+    let old = Utc::now() - chrono::Duration::days(2);
+    write_state(
+        &workspace.join("state.json"),
+        json!([{"id":"task-old","status":"completed","sessionId":"session-old",
+        "createdAt":old.to_rfc3339(),"completedAt":(old + chrono::Duration::minutes(1)).to_rfc3339()}]),
+    );
+    let config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: Some(dir.path().join("projects")),
+        ..MonitorConfig::default()
+    };
+    let (monitor, _events) = Monitor::start_with(config, Arc::new(Alive), Arc::new(Now));
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .find(|job| job.id == "task-old")
+            .and_then(|job| job.context.as_ref())
+            .and_then(|context| context.requester.as_ref())
+            .is_some()
+    });
+    assert_eq!(
+        monitor
+            .snapshot()
+            .into_iter()
+            .find(|job| job.id == "task-old")
+            .unwrap()
+            .context
+            .unwrap()
+            .requester
+            .unwrap()
+            .description
+            .as_deref(),
+        Some("古い架空の依頼")
+    );
+}
+
+#[test]
+fn old_unmatched_job_is_not_retried_after_first_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let workspace = root.join("fiction-workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let project = dir.path().join("projects/fiction-project");
+    let agents = project.join("session-old/subagents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(project.join("session-old.jsonl"), "").unwrap();
+    let agent_path = agents.join("agent-old.jsonl");
+    fs::write(&agent_path, "unrelated fictional transcript\n").unwrap();
+    fs::write(agents.join("agent-old.meta.json"),
+        serde_json::json!({"description":"後から現れた架空の依頼","agentType":"codex:codex-rescue","spawnDepth":1}).to_string()).unwrap();
+    let old = Utc::now() - chrono::Duration::days(2);
+    write_state(
+        &workspace.join("state.json"),
+        json!([{"id":"task-unmatched","status":"completed","sessionId":"session-old",
+        "createdAt":old.to_rfc3339(),"completedAt":(old + chrono::Duration::minutes(1)).to_rfc3339()}]),
+    );
+    let mut config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: Some(dir.path().join("projects")),
+        ..MonitorConfig::default()
+    };
+    config.rescan_interval = Duration::from_millis(50);
+    let (monitor, _events) = Monitor::start_with(config, Arc::new(Alive), Arc::new(Now));
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .find(|job| job.id == "task-unmatched")
+            .and_then(|job| job.context.as_ref())
+            .is_some()
+    });
+    assert!(
+        monitor
+            .snapshot()
+            .into_iter()
+            .find(|job| job.id == "task-unmatched")
+            .unwrap()
+            .context
+            .unwrap()
+            .requester
+            .is_none()
+    );
+    // A second transcript read would now discover this ID. Several rescans must leave it unmatched.
+    fs::write(&agent_path, serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"task-unmatched"}]}}).to_string()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    assert!(
+        monitor
+            .snapshot()
+            .into_iter()
+            .find(|job| job.id == "task-unmatched")
+            .unwrap()
+            .context
+            .unwrap()
+            .requester
+            .is_none()
+    );
+}

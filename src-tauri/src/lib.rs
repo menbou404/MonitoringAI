@@ -44,7 +44,9 @@ pub fn run() {
                 Ok(enabled) => settings.autostart = enabled,
                 Err(error) => tracing::warn!(%error,"autostart query failed"),
             }
-            let (monitor, events) = Monitor::start(settings.monitor_config());
+            let history_dir = handle.path().app_local_data_dir()?.join("history");
+            let (monitor, events) =
+                Monitor::start(settings.monitor_config_with_history(history_dir.clone()));
             let snapshot = AppSnapshot {
                 jobs: monitor.snapshot(),
                 health: monitor.health(),
@@ -57,6 +59,7 @@ pub fn run() {
             app.manage(AppState {
                 monitor,
                 settings_path,
+                history_dir,
                 inner: Mutex::new(snapshot),
             });
             tray::create(handle)?;

@@ -298,6 +298,11 @@ mod tests {
             session_id: None,
             latest_message: None,
             log_modified_at: None,
+            context: None,
+            previous_job_id: None,
+            archived: false,
+            archived_note: None,
+            prompt_head: None,
         }
     }
     #[test]
