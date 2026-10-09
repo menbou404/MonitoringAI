@@ -16,3 +16,4 @@
 | [0001](0001-app-framework.md) | アプリの基盤にTauri 2（Rust + React/TypeScript）を使う | 承認 | 2026-10-04 |
 | [0002](0002-data-source.md) | codex-plugin-cc の状態ファイルを読み取り専用で監視する | 承認 | 2026-10-04 |
 | [0003](0003-focus-interruption-strategy.md) | 作業の中断は「指示・受け身の防御・正規の起動手段」の3層で防ぐ | 承認（方式の詳細はPoC後に追記） | 2026-10-04 |
+| [0004](0004-job-context-and-history.md) | Claude Code の会話記録からジョブの文脈を求め、独自の履歴を持つ | 承認 | 2026-10-09 |

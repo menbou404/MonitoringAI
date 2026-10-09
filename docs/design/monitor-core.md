@@ -1,7 +1,7 @@
 # 監視コア（monitor-core）
 
 - 対象: 段階1
-- 最終更新: 2026-10-04
+- 最終更新: 2026-10-09
 - 前提として読む文書: [データソース仕様](data-source.md)
 
 状態ファイルを見張り、ジョブのスナップショットと変更イベントを作る部分。Tauriに依存しないクレート `src-tauri/crates/monitor-core` として作る。トレイ・通知・画面は、ここが出すスナップショットと変更イベントだけを使う。
@@ -17,7 +17,9 @@ monitor-core/
 │  ├─ model.rs       Job, JobStatus, Phase, EffectiveState など
 │  ├─ liveness.rs    PIDの生存確認（トレイトで差し替えられるようにする）
 │  ├─ log_tail.rs    ログの差分読み込み
-│  └─ store.rs       スナップショットの保持、実効状態の判定、変更の検出
+│  ├─ store.rs       スナップショットの保持、実効状態の判定、変更の検出
+│  ├─ context.rs     ジョブの文脈（会話・依頼・スレッド）の照合（[ジョブの文脈](job-context.md)）
+│  └─ history.rs     独自の履歴の保存と読み込み（[履歴](history.md)）
 ├─ examples/
 │  └─ watch.rs       手動確認用。実際の状態ルートを監視してイベントを標準出力に出す
 └─ tests/            fixtureを使った結合テスト
@@ -46,9 +48,13 @@ monitor-core/
   | `rescan_interval` / `liveness_interval` | 5秒 / 5秒 |
   | `debounce` | 200ms |
   | `initial_log_bytes` | 1MB |
+  | `claude_projects_dir` | `%USERPROFILE%.claudeprojects`（`None` なら文脈を求めない） |
+  | `history_dir` | `None`（本アプリが `app_local_data_dir()/history` を渡す。`None` なら履歴を使わない） |
+  | `history_days` | 30 |
 
 - **型**: 画面に渡す型（`JobSummary`、`JobDetail`、`EffectiveState`、`LogChunk`、`Health` など）は `serde::Serialize` を付け、`ts` 機能のときだけ `#[cfg_attr(feature = "ts", derive(ts_rs::TS))]` を付ける。フィールド名は camelCase で出す。
 - **`JobSummary` に最低限持たせる項目**: `id`、`workspaceRoot`、`workspaceName`（`workspaceRoot` の末尾のフォルダ名）、`kind`、`kindLabel`、`title`、`summary`（`state.json` 側）、`status` と `phase`（生の文字列）、`effectiveState`、`createdAt` / `startedAt` / `completedAt` / `updatedAt`、`pid`、`threadId`、`write`、`sessionId`、`latestMessage`、`logModifiedAt`。
+- **文脈と履歴のための `JobSummary` の項目**: `context`（`JobContext` または `null`。[ジョブの文脈 1](job-context.md#1-求めるもの)）、`previousJobId`、`archived`（状態ファイルから消え、履歴にだけある）、`archivedNote`、`promptHead`（依頼文の先頭200文字。一覧の表示用）。
 - **`JobDetail` の追加項目**: `prompt`（依頼の全文。取り方は[データソース仕様 3](data-source.md#3-ジョブのフィールド)）、`turnId`、`model`、`effort`、`rendered`、`errorMessage`、`logFile`。
 - **`latestMessage`**: ログの最後の1行の形式のメッセージ（ブロックなら見出し＋本文の1行目）。200文字で切る。
 - **手動確認用の `examples/watch.rs`**: 既定の設定で監視を始め、`MonitorEvent` を1行ずつ標準出力に出す。出すのはID、ワークスペース名、`status`、`phase`、実効状態、`latestMessage` の先頭まで。依頼の全文は出さない。Ctrl+Cで終わる。
@@ -116,7 +122,7 @@ Tauri側（[トレイと通知](tray-notification.md)、[画面](window-ui.md)�
 
 | 種類 | 内容 |
 |---|---|
-| `JobsChanged { changed, removed }` | 追加・状態の変化・フェーズの変化・最新メッセージの変化があったジョブと、削除されたID |
+| `JobsChanged { changed, removed }` | 追加・状態の変化・フェーズの変化・最新メッセージの変化・文脈が求まった・履歴に移った（`archived` になった）ジョブと、削除されたID。**状態ファイルから消えただけのジョブは `removed` ではなく `changed`（`archived: true`）で出す**（[履歴 3](history.md#3-一覧への合成)） |
 | `StateTransition { id, from: Option<EffectiveState>, to }` | 実効状態の変化。通知の判定に使う。**監視を始めたときの最初の読み込みでは出さない**。それ以降に新しく現れたジョブは `from: None` で出す（現れた時点で `Running` のジョブや、スキャンの間に始まって終わったジョブも通知できるように） |
 | `LogAppended { id, text, start, end }` | 購読中のジョブのログの追記 |
 | `HealthChanged(health)` | バージョンの不一致や読み込みエラーなど |
