@@ -4,7 +4,7 @@ import { Banner } from "./components/Banner";
 import { JobDetail } from "./components/JobDetail";
 import { JobList } from "./components/JobList";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { groups, workspaces } from "./model/jobList";
+import { conversationKey, groups, visibleJobIds, workspaces } from "./model/jobList";
 import { initialState, reducer } from "./model/store";
 import "./styles.css";
 
@@ -12,11 +12,19 @@ export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expandedChains, setExpandedChains] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
   const snapshot = state.snapshot;
-  const list = useMemo(() => snapshot ? groups(snapshot.jobs, snapshot.settings, now, workspace) : { active: [], recent: [] }, [snapshot, now, workspace]);
-  const ids = [...list.active, ...list.recent].map((job) => job.id);
+  const list = useMemo(() => snapshot ? groups(snapshot.jobs, snapshot.settings, now, workspace, snapshot.unseen) : [], [snapshot, now, workspace]);
+  const ids = visibleJobIds(list, expanded, expandedChains);
   const job = snapshot?.jobs.find((j) => j.id === state.selected) ?? null;
+  useEffect(() => {
+    if (!job) return;
+    setExpanded((current) => ({ ...current, [conversationKey(job)]: true }));
+    const chain = list.find((conversation) => conversation.key === conversationKey(job))?.chains.find((entry) => entry.previous.slice(3).some((previous) => previous.id === job.id));
+    if (chain) setExpandedChains((current) => ({ ...current, [chain.latest.id]: true }));
+  }, [state.selected]);
 
   useEffect(() => {
     let alive = true;
@@ -46,11 +54,11 @@ export function App() {
     let alive = true;
     const id = state.selected;
     dispatch({ type: "error", value: null });
-    Promise.all([api.job(id), api.log(id, null), api.watchLog(id), api.markSeen(id)])
+    Promise.all([api.job(id), job?.archived ? Promise.resolve(null) : api.log(id, null), api.watchLog(job?.archived ? null : id), api.markSeen(id)])
       .then(([detail, log]) => { if (alive) { dispatch({ type: "detail", value: detail }); dispatch({ type: "log", value: log }); } })
       .catch((error) => { if (alive) dispatch({ type: "error", value: String(error) }); });
     return () => { alive = false; };
-  }, [state.selected]);
+  }, [state.selected, job?.archived]);
   useEffect(() => {
     if (state.logNeedsReload && state.selected) {
       api.log(state.selected, null).then((value) => dispatch({ type: "log", value }))
@@ -77,8 +85,15 @@ export function App() {
   }
   function select(id: string) { dispatch({ type: "select", id }); }
   function onKeyDown(event: React.KeyboardEvent) {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" || !ids.length) return;
+    if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
     if ((event.target as HTMLElement).closest("input,textarea,select,dialog")) return;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if (!job) return;
+      event.preventDefault();
+      setExpanded((current) => ({ ...current, [conversationKey(job)]: event.key === "ArrowRight" }));
+      return;
+    }
+    if (!ids.length) return;
     event.preventDefault();
     const current = ids.indexOf(state.selected ?? "");
     const next = event.key === "ArrowDown" ? Math.min(ids.length - 1, current + 1) : Math.max(0, current < 0 ? 0 : current - 1);
@@ -97,10 +112,12 @@ export function App() {
       <select aria-label="ワークスペース" value={workspace ?? ""} onChange={(e) => setWorkspace(e.target.value || null)}>
         <option value="">すべて</option>{snapshot && workspaces(snapshot.jobs).map((name) => <option value={name} key={name}>{name}</option>)}
       </select><button title="設定" aria-label="設定" onClick={() => setSettingsOpen(true)}>⚙</button></div>
-      {snapshot ? <JobList active={list.active} recent={list.recent} selected={state.selected} unseen={snapshot.unseen} health={snapshot.health} now={now} onSelect={select} />
+      {snapshot ? <JobList conversations={list} expanded={expanded} expandedChains={expandedChains} selected={state.selected} unseen={snapshot.unseen} health={snapshot.health} now={now} onSelect={select}
+        onToggle={(key, open) => setExpanded((current) => ({ ...current, [key]: open }))}
+        onToggleChain={(id) => setExpandedChains((current) => ({ ...current, [id]: !current[id] }))} />
         : <div className="loading">読み込み中…</div>}
-    </aside><main className="main-panel"><JobDetail job={job} detail={state.detail} log={state.log} now={now} error={state.error}
-      onOlder={older} onOpen={openPath} onCopy={copy} /></main></div>
+    </aside><main className="main-panel"><JobDetail job={job} jobs={snapshot?.jobs ?? []} detail={state.detail} log={state.log} now={now} error={state.error}
+      onOlder={older} onOpen={openPath} onCopy={copy} onSelect={select} /></main></div>
     {settingsOpen && snapshot && <SettingsDialog settings={snapshot.settings} onClose={() => setSettingsOpen(false)} onSave={async (value) => {
       const saved = await api.setSettings(value); dispatch({ type: "settings", value: saved });
     }} />}

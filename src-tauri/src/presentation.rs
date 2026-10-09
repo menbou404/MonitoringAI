@@ -48,6 +48,7 @@ pub fn phase_name(job: &JobSummary) -> &str {
         E::Orphaned => "停止した可能性",
         E::Completed => "完了",
         E::Failed => "失敗",
+        E::Cancelled if job.archived_note.is_some() => "中断された可能性",
         E::Cancelled => "キャンセル",
         E::Unknown => &job.status,
         E::Running => match job.phase.as_deref() {
@@ -91,6 +92,21 @@ fn workspace(job: &JobSummary) -> &str {
     job.workspace_name
         .as_deref()
         .unwrap_or("不明なワークスペース")
+}
+
+fn request_description(job: &JobSummary) -> &str {
+    job.context
+        .as_ref()
+        .and_then(|context| context.requester.as_ref())
+        .and_then(|requester| requester.description.as_deref())
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| {
+            job.prompt_head
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+        })
+        .or_else(|| job.title.as_deref().filter(|text| !text.trim().is_empty()))
+        .unwrap_or("依頼内容なし")
 }
 
 pub fn active_jobs(jobs: &[JobSummary]) -> Vec<&JobSummary> {
@@ -172,13 +188,9 @@ pub fn menu_rows(
         .map(|j| MenuRow::Job {
             id: j.id.clone(),
             label: format!(
-                "{}{} — {} — {}",
+                "{}: {} — {} — {}",
                 workspace(j),
-                j.summary
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                    .map(|s| format!("「{}」", clip_menu_summary(s)))
-                    .unwrap_or_default(),
+                clip_with_ellipsis(request_description(j), 30),
                 phase_name(j),
                 elapsed_job(j, now_ms)
             ),
@@ -204,13 +216,13 @@ pub fn menu_rows(
     rows
 }
 
-fn clip_menu_summary(value: &str) -> String {
+fn clip_with_ellipsis(value: &str, limit: usize) -> String {
     let flattened = value
         .chars()
         .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
         .collect::<String>();
     let mut chars = flattened.trim().chars();
-    let text = chars.by_ref().take(20).collect::<String>();
+    let text = chars.by_ref().take(limit).collect::<String>();
     if chars.next().is_some() {
         format!("{text}…")
     } else {
@@ -233,15 +245,13 @@ pub fn notification(
     quiet_minutes: u64,
     now_ms: i64,
 ) -> Option<Notice> {
-    if !settings.enabled {
+    if !settings.enabled || job.archived {
         return None;
     }
     let (enabled, title, suffix) = match to {
-        E::Running if from.is_none_or(|s| *s == E::Queued) => (
-            settings.started,
-            "Codexが開始",
-            detail.or(job.summary.as_deref()),
-        ),
+        E::Running if from.is_none_or(|s| *s == E::Queued) => {
+            (settings.started, "Codexが開始", None)
+        }
         E::Completed => (settings.completed, "Codexが完了", job.summary.as_deref()),
         E::Failed => (settings.failed, "Codexが失敗", detail),
         E::Orphaned => (settings.orphaned, "Codexのジョブが停止した可能性", None),
@@ -258,10 +268,13 @@ pub fn notification(
             .map(|time| (now_ms.saturating_sub(time.timestamp_millis()) / 60_000).max(0) as u64)
             .unwrap_or(quiet_minutes);
         format!("{name}（{minutes}分）")
-    } else if let Some(value) = suffix {
-        format!("{name} — {}", clip_text(value, 80))
     } else {
-        name.into()
+        let first = format!("{name} — {}", clip_text(request_description(job), 80));
+        if let Some(value) = suffix.filter(|value| !value.trim().is_empty()) {
+            format!("{first}\n{}", clip_text(value, 80))
+        } else {
+            first
+        }
     };
     Some(Notice { title, body })
 }
@@ -276,6 +289,7 @@ pub fn clip_text(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monitor_core::{JobContext, Requester, RequesterKind};
     fn job(id: &str, state: E) -> JobSummary {
         JobSummary {
             id: id.into(),
@@ -354,18 +368,29 @@ mod tests {
     fn same_workspace_jobs_have_distinct_request_in_menu() {
         let mut first = job("one", E::Running);
         first.workspace_name = Some("shared".into());
-        first.summary = Some("first task\nwith details".into());
+        first.prompt_head = Some("fallback request".into());
+        first.context = Some(JobContext {
+            session_id: "same".into(),
+            session_title: None,
+            requester: Some(Requester {
+                kind: RequesterKind::Subagent,
+                description: Some("first task\nwith details".into()),
+                agent_type: None,
+                depth: 1,
+                parent_description: None,
+            }),
+        });
         let mut second = job("two", E::Running);
         second.workspace_name = Some("shared".into());
-        second.summary = Some("second task".into());
+        second.prompt_head = Some("second task".into());
         let rows = menu_rows(&[first, second], None, 0, true, false);
         assert!(
-            matches!(&rows[0], MenuRow::Job { label, .. } if label.contains("first task with deta…"))
+            matches!(&rows[0], MenuRow::Job { label, .. } if label.contains("first task with details"))
         );
         assert!(matches!(&rows[1], MenuRow::Job { label, .. } if label.contains("second task")));
         assert_eq!(
-            clip_menu_summary(&"あ".repeat(21)),
-            format!("{}…", "あ".repeat(20))
+            clip_with_ellipsis(&"あ".repeat(31), 30),
+            format!("{}…", "あ".repeat(30))
         );
     }
     #[test]
@@ -390,6 +415,46 @@ mod tests {
         );
         s.enabled = false;
         assert!(notification(None, &E::Completed, &job, None, &s, 10, 0).is_none());
+        let mut archived = job.clone();
+        archived.archived = true;
+        s.enabled = true;
+        assert!(
+            notification(Some(&E::Running), &E::Cancelled, &archived, None, &s, 10, 0).is_none()
+        );
+        assert!(notification(None, &E::Completed, &archived, None, &s, 10, 0).is_none());
+    }
+    #[test]
+    fn notification_uses_request_and_result_on_separate_lines() {
+        let mut target = job("repo", E::Completed);
+        target.workspace_name = Some("shared".into());
+        target.prompt_head = Some("fix docs\nquickly".into());
+        let settings = NotificationSettings::default();
+        assert_eq!(
+            notification(None, &E::Completed, &target, None, &settings, 10, 0)
+                .unwrap()
+                .body,
+            "shared — fix docs quickly\nresult"
+        );
+        assert_eq!(
+            notification(
+                None,
+                &E::Failed,
+                &target,
+                Some("bad\nerror"),
+                &settings,
+                10,
+                0
+            )
+            .unwrap()
+            .body,
+            "shared — fix docs quickly\nbad error"
+        );
+        assert_eq!(
+            notification(None, &E::Orphaned, &target, None, &settings, 10, 0)
+                .unwrap()
+                .body,
+            "shared — fix docs quickly"
+        );
     }
     #[test]
     fn text_and_elapsed_boundaries() {

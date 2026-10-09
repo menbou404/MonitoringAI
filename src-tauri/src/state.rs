@@ -52,6 +52,7 @@ impl AppState {
         let monitor_changed = {
             let mut snapshot = self.inner.lock().expect("app state");
             let changed = snapshot.settings.quiet_minutes != settings.quiet_minutes
+                || snapshot.settings.history_days != settings.history_days
                 || snapshot.settings.extra_state_roots != settings.extra_state_roots;
             snapshot.settings = settings.clone();
             changed

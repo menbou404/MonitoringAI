@@ -59,9 +59,9 @@ pub struct Settings {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub quiet_minutes: u64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub recent_hours: u64,
+    pub list_days: u32,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub recent_limit: usize,
+    pub history_days: u32,
     pub extra_state_roots: Vec<PathBuf>,
     pub autostart: bool,
     pub window: Option<WindowPlacement>,
@@ -72,8 +72,8 @@ impl Default for Settings {
         Self {
             notifications: NotificationSettings::default(),
             quiet_minutes: 10,
-            recent_hours: 24,
-            recent_limit: 50,
+            list_days: 3,
+            history_days: 30,
             extra_state_roots: Vec::new(),
             autostart: false,
             window: None,
@@ -86,11 +86,11 @@ impl Settings {
         if !(1..=120).contains(&self.quiet_minutes) {
             return Err("応答なしまでの分数は1〜120にしてください".into());
         }
-        if !(1..=168).contains(&self.recent_hours) {
-            return Err("最近の期間は1〜168時間にしてください".into());
+        if !(1..=30).contains(&self.list_days) {
+            return Err("一覧の期間は1〜30日にしてください".into());
         }
-        if !(10..=500).contains(&self.recent_limit) {
-            return Err("最近の件数は10〜500件にしてください".into());
+        if !(1..=90).contains(&self.history_days) || self.history_days < self.list_days {
+            return Err("履歴の保存期間は一覧の期間以上、90日以下にしてください".into());
         }
         if self
             .extra_state_roots
@@ -105,6 +105,7 @@ impl Settings {
     pub fn monitor_config(&self) -> monitor_core::MonitorConfig {
         monitor_core::MonitorConfig {
             quiet_after: Duration::from_secs(self.quiet_minutes.saturating_mul(60)),
+            history_days: self.history_days,
             extra_state_roots: self.extra_state_roots.clone(),
             ..Default::default()
         }
@@ -160,6 +161,8 @@ mod tests {
         assert!(!settings.notifications.enabled);
         assert!(settings.notifications.completed);
         assert_eq!(settings.quiet_minutes, 10);
+        assert_eq!(settings.list_days, 3);
+        assert_eq!(settings.history_days, 30);
     }
     #[test]
     fn damaged_file_is_backed_up() {
@@ -195,13 +198,31 @@ mod tests {
         s.quiet_minutes = 121;
         assert!(s.validate().is_err());
         s.quiet_minutes = 10;
-        s.recent_hours = 169;
+        s.list_days = 31;
         assert!(s.validate().is_err());
-        s.recent_hours = 24;
-        s.recent_limit = 9;
+        s.list_days = 3;
+        s.history_days = 0;
         assert!(s.validate().is_err());
-        s.recent_limit = 50;
+        s.history_days = 91;
+        assert!(s.validate().is_err());
+        s.history_days = 2;
+        assert!(s.validate().is_err());
+        s.history_days = 30;
         s.extra_state_roots.push(PathBuf::from("relative"));
         assert!(s.validate().is_err());
+    }
+    #[test]
+    fn old_recent_fields_are_ignored_and_history_reaches_monitor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"recent_hours":168,"recent_limit":500,"list_days":7,"history_days":45}"#,
+        )
+        .unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(settings.list_days, 7);
+        assert_eq!(settings.history_days, 45);
+        assert_eq!(settings.monitor_config().history_days, 45);
     }
 }

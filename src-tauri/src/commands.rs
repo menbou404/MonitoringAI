@@ -63,8 +63,8 @@ fn known_path(
             .workspace_root
             .as_ref()
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .ok_or_else(|| "ワークスペースのパスがありません".into()),
+            .filter(|p| p.is_absolute() && p.is_dir())
+            .ok_or_else(|| "ワークスペースのフォルダが見つかりません".into()),
         "log" => {
             if id.is_empty()
                 || !id
@@ -140,6 +140,36 @@ pub fn take_pending_focus(state: State<'_, AppState>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monitor_core::EffectiveState;
+    fn job_with_workspace(root: &std::path::Path) -> JobSummary {
+        JobSummary {
+            id: "known".into(),
+            workspace_root: Some(root.to_string_lossy().into_owned()),
+            workspace_name: None,
+            kind: None,
+            kind_label: None,
+            title: None,
+            summary: None,
+            status: "running".into(),
+            phase: None,
+            effective_state: EffectiveState::Running,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            updated_at: None,
+            pid: None,
+            thread_id: None,
+            write: None,
+            session_id: None,
+            latest_message: None,
+            log_modified_at: None,
+            context: None,
+            previous_job_id: None,
+            archived: false,
+            archived_note: None,
+            prompt_head: None,
+        }
+    }
     #[test]
     fn unknown_id_and_invalid_kind_cannot_open() {
         assert!(
@@ -152,5 +182,19 @@ mod tests {
             .is_err()
         );
         assert!(known_path("arbitrary", "missing", &[], &[]).is_err());
+        assert!(known_path("workspace", "missing", &[], &[]).is_err());
+    }
+    #[test]
+    fn workspace_path_must_be_an_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("program.exe");
+        std::fs::write(&file, b"fixture").unwrap();
+        assert!(known_path("workspace", "known", &[job_with_workspace(&file)], &[]).is_err());
+        let missing = dir.path().join("missing");
+        assert!(known_path("workspace", "known", &[job_with_workspace(&missing)], &[]).is_err());
+        assert_eq!(
+            known_path("workspace", "known", &[job_with_workspace(dir.path())], &[]).unwrap(),
+            dir.path()
+        );
     }
 }

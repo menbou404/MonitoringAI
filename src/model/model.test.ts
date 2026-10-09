@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { JobSummary } from "../bindings/JobSummary";
 import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
-import { elapsed, phaseName, stateName } from "./format";
-import { groups } from "./jobList";
+import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
+import { groups, visibleJobIds } from "./jobList";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 const settings: Settings = { notifications: { enabled: true, started: false, completed: true, failed: true, orphaned: true, quiet: false },
-  quiet_minutes: 10, recent_hours: 24, recent_limit: 10, extra_state_roots: [], autostart: false, window: null };
+  quiet_minutes: 10, list_days: 3, history_days: 30, extra_state_roots: [], autostart: false, window: null };
 function job(id: string, state: JobSummary["effectiveState"], date = "2026-10-08T11:00:00Z"): JobSummary {
   return { id, workspaceRoot: "C:\\Shared", workspaceName: "Shared", kind: "task", kindLabel: "rescue", title: "Task", summary: `Request ${id}`,
     status: state, phase: null, effectiveState: state, createdAt: date, startedAt: date, completedAt: state === "completed" ? date : null,
@@ -24,19 +24,46 @@ describe("format", () => {
     expect(stateName("quiet", null)).toBe("応答なし？");
     expect(stateName("unknown", null, "future-state")).toBe("future-state");
     expect(elapsed(59)).toBe("1分未満"); expect(elapsed(60)).toBe("1分"); expect(elapsed(3600)).toBe("1時間0分");
+    expect(finishedTime("2026-10-07T09:00:00Z", now)).toMatch(/10\/07/);
   });
 });
 describe("job groups", () => {
-  it("keeps simultaneous jobs in one workspace distinct, sorts them, filters, and limits recent jobs", () => {
-    const older = job("older", "running", "2026-10-08T10:00:00Z");
-    const newer = job("newer", "running", "2026-10-08T11:00:00Z");
-    const recent = job("recent", "completed", "2026-10-08T09:00:00Z");
-    const old = job("expired", "completed", "2026-10-06T09:00:00Z");
-    const other = { ...job("other", "running"), workspaceName: "Other" };
-    const result = groups([older, newer, recent, old, other], settings, now, "Shared");
-    expect(result.active.map((j) => j.id)).toEqual(["newer", "older"]);
-    expect(result.recent.map((j) => j.id)).toEqual(["recent"]);
-    expect(groups([recent, job("second", "completed", "2026-10-08T08:00:00Z")], { ...settings, recent_limit: 1 }, now, null).recent).toHaveLength(1);
+  const context = (title: string, description: string | null) => ({ sessionId: title, sessionTitle: title,
+    requester: { kind: "subagent" as const, description, agentType: null, depth: 1, parentDescription: null } });
+  it("groups by conversation, orders active conversations and distinct requests, and falls back to prompt and title", () => {
+    const older = { ...job("older", "running", "2026-10-08T10:00:00Z"), context: context("会話A", "画面を作る") };
+    const newer = { ...job("newer", "running", "2026-10-08T11:00:00Z"), context: context("会話A", "設定を作る") };
+    const other = { ...job("other", "running", "2026-10-08T09:00:00Z"), workspaceName: "Other", context: context("会話B", "別件") };
+    const unknown = job("unknown", "completed");
+    const result = groups([older, newer, other, unknown], settings, now, null);
+    expect(result.map((group) => group.title)).toEqual(["会話A", "会話B", "会話が不明 — Shared"]);
+    expect(result[0].chains.map((chain) => chain.latest.id)).toEqual(["newer", "older"]);
+    expect(result[0].defaultOpen).toBe(true);
+    expect(result[2].defaultOpen).toBe(false);
+    expect(groups([unknown], settings, now, null, ["unknown"])[0].defaultOpen).toBe(true);
+    expect(requestLead(newer)).toBe("設定を作る");
+    expect(requestLead({ ...newer, context: context("会話A", null), promptHead: "依頼の先頭" })).toBe("依頼の先頭");
+    expect(requestLead({ ...newer, context: null, promptHead: null })).toBe("Task");
+    expect(groups([older, newer, other], settings, now, "Shared")).toHaveLength(1);
+  });
+  it("puts a three-job thread beneath its newest job and applies the display period", () => {
+    const first = { ...job("first", "completed", "2026-10-07T08:00:00Z"), context: context("会話", "最初") };
+    const second = { ...job("second", "completed", "2026-10-07T09:00:00Z"), context: context("会話", "続き"), previousJobId: "first" };
+    const third = { ...job("third", "running", "2026-10-08T10:00:00Z"), context: context("会話", "最新"), previousJobId: "second" };
+    const expired = job("expired", "completed", "2026-10-04T09:00:00Z");
+    const result = groups([first, second, third, expired], settings, now, null);
+    expect(result).toHaveLength(1);
+    expect(result[0].chains[0].latest.id).toBe("third");
+    expect(result[0].chains[0].previous.map((item) => item.id)).toEqual(["second", "first"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["third", "second", "first"]);
+    expect(visibleJobIds(result, { [result[0].key]: false }, {})).toEqual([]);
+  });
+  it("shows three previous jobs first and expands the rest", () => {
+    const chain = Array.from({ length: 5 }, (_, index) => ({ ...job(`job-${index}`, "completed", `2026-10-08T0${index + 1}:00:00Z`),
+      context: context("会話", `依頼 ${index}`), previousJobId: index ? `job-${index - 1}` : null }));
+    const result = groups(chain, settings, now, null, ["job-4"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["job-4", "job-3", "job-2", "job-1"]);
+    expect(visibleJobIds(result, {}, { "job-4": true })).toEqual(["job-4", "job-3", "job-2", "job-1", "job-0"]);
   });
 });
 describe("log parsing", () => {

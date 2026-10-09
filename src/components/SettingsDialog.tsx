@@ -16,8 +16,8 @@ export function SettingsDialog({ settings, onClose, onSave }: { settings: Settin
   const rootValues = roots.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const errors = {
     quiet_minutes: numericError(draft.quiet_minutes, 1, 120),
-    recent_hours: numericError(draft.recent_hours, 1, 168),
-    recent_limit: numericError(draft.recent_limit, 10, 500),
+    list_days: numericError(draft.list_days, 1, 30),
+    history_days: numericError(draft.history_days, 1, 90) ?? (draft.history_days < draft.list_days ? "一覧の期間以上にしてください" : null),
     roots: rootValues.every((s) => /^[A-Za-z]:[\\/]/.test(s) || /^\\\\[^\\]+\\[^\\]+/.test(s)) ? null : "絶対パスを1行ずつ入力してください",
   };
   const invalid = Object.values(errors).some(Boolean);
@@ -28,7 +28,7 @@ export function SettingsDialog({ settings, onClose, onSave }: { settings: Settin
     catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
-  const numberField = (label: string, key: "quiet_minutes" | "recent_hours" | "recent_limit") =>
+  const numberField = (label: string, key: "quiet_minutes" | "list_days" | "history_days") =>
     <label className="field">{label}<input type="number" value={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) })} />
       {errors[key] && <small className="field-error">{errors[key]}</small>}</label>;
   return <div className="dialog-backdrop" onMouseDown={onClose}><div className="settings-dialog" role="dialog" aria-modal="true" aria-label="設定" onMouseDown={(e) => e.stopPropagation()}>
@@ -38,8 +38,8 @@ export function SettingsDialog({ settings, onClose, onSave }: { settings: Settin
       <fieldset><legend>通知のきっかけ</legend>{notificationKeys.map(([key, label]) => <label className="switch" key={key}><input type="checkbox" checked={draft.notifications[key]}
         onChange={(e) => setDraft({ ...draft, notifications: { ...draft.notifications, [key]: e.target.checked } })} />{label}</label>)}</fieldset>
       {numberField("応答なしと判定するまでの分数", "quiet_minutes")}
-      {numberField("最近に出す期間（時間）", "recent_hours")}
-      {numberField("最近に出す件数", "recent_limit")}
+      {numberField("一覧に出す終わったジョブの期間（日）", "list_days")}
+      {numberField("履歴の保存期間（日）", "history_days")}
       <label className="field">追加で監視する状態ルート<textarea value={roots} onChange={(e) => setRoots(e.target.value)} rows={4} placeholder="C:\\path\\to\\state" />
         {errors.roots && <small className="field-error">{errors.roots}</small>}</label>
       <label className="switch"><input type="checkbox" checked={draft.autostart} onChange={(e) => setDraft({ ...draft, autostart: e.target.checked })} />Windows起動時に起動</label>

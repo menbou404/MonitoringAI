@@ -2,4 +2,4 @@
 import type { NotificationSettings } from "./NotificationSettings";
 import type { WindowPlacement } from "./WindowPlacement";
 
-export type Settings = { notifications: NotificationSettings, quiet_minutes: number, recent_hours: number, recent_limit: number, extra_state_roots: Array<string>, autostart: boolean, window: WindowPlacement | null, };
+export type Settings = { notifications: NotificationSettings, quiet_minutes: number, list_days: number, history_days: number, extra_state_roots: Array<string>, autostart: boolean, window: WindowPlacement | null, };
