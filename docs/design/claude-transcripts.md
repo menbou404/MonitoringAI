@@ -12,7 +12,7 @@ Claude Code（Desktop版を含む）が残す会話の記録のうち、本ア�
 
 ```
 %USERPROFILE%\.claude\projects\
-└─ <作業フォルダから作った名前>\          例: C--Users-GreenBird-WebProjects-MonitoringAI
+└─ <作業フォルダから作った名前>\          例: C--Users-alice-Projects-MyApp
    ├─ <sessionId>.jsonl                   会話の本体の記録（1行に1件のJSON）
    └─ <sessionId>\
       ├─ custom-title.json                会話のタイトル（付いている場合だけ）

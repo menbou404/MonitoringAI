@@ -85,7 +85,7 @@ codex-plugin-cc **v1.0.6**（`gitCommitSha: db52e28f`）のソースと、手元
 - フォアグラウンド実行でもバックグラウンド実行でも、同じ仕組み（`runTrackedJob`）で書き出される。
 - ジョブが51件以上になると、`updatedAt` の古いものから `state.json` から外され、**そのジョブファイルとログファイルは削除される**。
 - キャンセル（`/codex:cancel`）では `status` と `phase` が `cancelled` になり、`cancelledAt` が付く。
-- **Claude の会話が終わると（SessionEnd フックの `cleanupSessionJobs`）、その会話の `sessionId` を持つジョブを `state.json` から外し、ジョブファイルとログファイルも削除する。** まだ `queued` / `running` のジョブは、プロセスごと強制終了する。会話を閉じる・アプリを再起動するなどで起こる（2026-10-09に、この会話の前半のジョブが消えていたことで確認）。本アプリはこれに備えて独自の[履歴](history.md)を持つ。
+- **Claude の会話が終わると（SessionEnd フックの `cleanupSessionJobs`）、その会話の `sessionId` を持つジョブを `state.json` から外し、ジョブファイルとログファイルも削除する。** まだ `queued` / `running` のジョブは、プロセスごと強制終了する。会話を閉じる・アプリを再起動するなどで起こる（2026-10-09 に実際の状態ファイルで確認）。本アプリはこれに備えて独自の[履歴](history.md)を持つ。
 
 ## 6. プロセスの構造
 
