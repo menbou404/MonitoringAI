@@ -23,3 +23,39 @@
 .continuity button { border: 1px solid var(--border); border-radius: 5px; padding: 6px 9px; color: var(--accent); background: var(--surface); text-align: left; }
 .archive-notice { border: 1px solid var(--border); border-radius: 5px; padding: 9px; font-size: 12px; }
 .archive-notice p { margin: 5px 0 0; color: var(--muted); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.view-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; flex: none; }
+.view-switch button { border: 0; background: var(--surface); color: inherit; padding: 7px 13px; }
+.view-switch button + button { border-left: 1px solid var(--border); }
+.view-switch button[aria-current="page"] { background: var(--selected); color: var(--accent); font-weight: 700; }
+.topbar-actions { display: flex; gap: 8px; min-width: 0; }
+.topbar-actions select, .topbar-actions button { border: 1px solid var(--border); border-radius: 6px; color: inherit; background: var(--surface); padding: 6px 9px; }
+.topbar-actions select { min-width: 0; max-width: 220px; }
+.topbar-actions button { font-size: 18px; line-height: 1; }
+.group-heading { min-height: 52px; flex-wrap: wrap; gap: 2px 4px; padding: 7px 12px; }
+.group-heading span { flex: 1 1 100%; font-size: 12px; color: inherit; }
+.group-heading small { margin-left: 16px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.job-row { display: flex; flex-direction: row; align-items: center; min-height: 40px; gap: 5px; padding: 7px 10px 7px 20px; white-space: nowrap; }
+.job-lead { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.job-status { flex: none; color: var(--muted); font-size: 11px; }
+.job-status.active { border: 1px solid var(--border); border-radius: 10px; padding: 2px 5px; color: var(--accent); }
+.continuation, .job-kind { flex: none; font-size: 10px; color: var(--muted); }
+.continuation { color: var(--accent); }
+.more-jobs { padding: 8px 12px 8px 34px; color: var(--accent); }
+.running-view { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+.running-cards { display: flex; flex-direction: column; gap: 10px; }
+.running-card { display: flex; flex-direction: column; width: 100%; gap: 8px; padding: 14px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; }
+.running-card:hover, .running-card:focus-visible { background: var(--selected); outline-color: var(--accent); }
+.running-card.quiet { border-color: #d18418; }.running-card.orphaned { border-color: var(--error); }
+.running-card-top { display: flex; align-items: flex-start; gap: 7px; }
+.running-card-top strong { flex: 1; min-width: 0; font-size: 15px; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.running-card-top .status { flex: none; }
+.running-card-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.running-card-meta span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running-card-meta span:last-child { flex: none; }
+.running-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 12px Consolas, monospace; }
+.running-empty { color: var(--muted); text-align: center; margin: 25px 0; }
+.recent-inline { display: block; margin-top: 15px; width: 100%; padding: 9px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; border-top: 1px solid var(--border); color: var(--muted); background: var(--surface); }
+.recent-list { margin-top: 20px; }.recent-list h2 { font-size: 13px; color: var(--muted); }
+.recent-list button { width: 100%; display: flex; justify-content: space-between; gap: 10px; padding: 10px 4px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); color: inherit; text-align: left; }
+.recent-list button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.recent-list time { color: var(--muted); flex: none; }

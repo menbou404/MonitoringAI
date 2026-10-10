@@ -4,7 +4,8 @@ import type { JobSummary } from "../bindings/JobSummary";
 import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
-import { groups, visibleJobIds } from "./jobList";
+import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
+import { movementAgo, recentCompleted, runningJobs } from "./running";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
 
@@ -56,15 +57,62 @@ describe("job groups", () => {
     expect(result).toHaveLength(1);
     expect(result[0].chains[0].latest.id).toBe("third");
     expect(result[0].chains[0].previous.map((item) => item.id)).toEqual(["second", "first"]);
-    expect(visibleJobIds(result, {}, {})).toEqual(["third", "second", "first"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["third"]);
+    expect(result[0].chains[0].previous).toHaveLength(2);
     expect(visibleJobIds(result, { [result[0].key]: false }, {})).toEqual([]);
   });
-  it("shows three previous jobs first and expands the rest", () => {
+  it("keeps earlier jobs out of the list and counts the continuation", () => {
     const chain = Array.from({ length: 5 }, (_, index) => ({ ...job(`job-${index}`, "completed", `2026-10-08T0${index + 1}:00:00Z`),
       context: context("会話", `依頼 ${index}`), previousJobId: index ? `job-${index - 1}` : null }));
     const result = groups(chain, settings, now, null, ["job-4"]);
-    expect(visibleJobIds(result, {}, {})).toEqual(["job-4", "job-3", "job-2", "job-1"]);
-    expect(visibleJobIds(result, {}, { "job-4": true })).toEqual(["job-4", "job-3", "job-2", "job-1", "job-0"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["job-4"]);
+    expect(result[0].chains[0].previous).toHaveLength(4);
+  });
+  it("summarizes counts, sorts by status, and folds completed and cancelled jobs after two", () => {
+    const make = (id: string, state: JobSummary["effectiveState"], hour: number) => ({ ...job(id, state, `2026-10-08T${String(hour).padStart(2, "0")}:00:00Z`), context: context("会話", id),
+      completedAt: ["completed", "failed", "cancelled"].includes(state) ? `2026-10-08T${String(hour).padStart(2, "0")}:00:00Z` : null });
+    const jobs = [make("done1", "completed", 1), make("done2", "completed", 2), make("done3", "completed", 3), make("done4", "completed", 4),
+      make("cancel", "cancelled", 5), make("failed", "failed", 6), make("running", "running", 7), make("unseen", "completed", 8)];
+    const group = groups(jobs, settings, now, null, ["unseen"])[0];
+    expect(countSummary(group)).toBe("実行中 1 · 完了 5 · 失敗 1 · キャンセル 1");
+    expect(group.chains.map((chain) => chain.latest.id)).toEqual(["running", "unseen", "failed", "cancel", "done4", "done3", "done2", "done1"]);
+    expect(shownChains(group, false, ["unseen"]).map((chain) => chain.latest.id)).toEqual(["running", "unseen", "failed", "cancel", "done4"]);
+    expect(hiddenChains(group, ["unseen"])).toHaveLength(3);
+    expect(moreLabel(hiddenChains(group, ["unseen"]))).toBe("完了 3件を表示");
+    expect(moreLabel([{ latest: jobs[4], previous: [] }])).toBe("完了・キャンセル 1件を表示");
+    expect(shownChains(group, true, ["unseen"])).toHaveLength(8);
+    expect(visibleJobIds([group], {}, {}, ["unseen"])).toHaveLength(5);
+  });
+  it("keeps two simultaneous requests in one conversation distinct and groups unknown context by workspace", () => {
+    const a = { ...job("a", "running"), context: context("same", "画面"), workspaceName: "Shared" };
+    const b = { ...job("b", "running"), context: context("same", "テスト"), workspaceName: "Shared" };
+    const unknown = { ...job("c", "completed"), workspaceName: "Other", workspaceRoot: "C:\\Other" };
+    const result = groups([a, b, unknown], settings, now, null);
+    expect(result[0].chains.map((chain) => requestLead(chain.latest))).toEqual(["画面", "テスト"]);
+    expect(result[1].title).toBe("会話が不明 — Other");
+    expect(groups([a, b, unknown], settings, now, "Shared")).toHaveLength(1);
+  });
+  it("keeps a conversation with seven completed requests short", () => {
+    const jobs = Array.from({ length: 7 }, (_, index) => ({ ...job(`done-${index}`, "completed", `2026-10-08T0${index + 1}:00:00Z`),
+      context: context("long", `依頼 ${index}`) }));
+    const group = groups(jobs, settings, now, null, ["done-0"])[0];
+    expect(visibleJobIds([group], {}, {}, ["done-0"])).toHaveLength(3);
+    expect(hiddenChains(group, ["done-0"])).toHaveLength(4);
+    expect(visibleJobIds([group], {}, { [group.key]: true }, ["done-0"])).toHaveLength(7);
+  });
+});
+describe("running", () => {
+  it("shows only active jobs, with orphaned then quiet then newest, and keeps three recent endings", () => {
+    const jobs = [job("old", "running", "2026-10-08T08:00:00Z"), job("new", "running", "2026-10-08T10:00:00Z"),
+      job("quiet", "quiet"), job("orphan", "orphaned"), ...[1, 2, 3, 4].map((hour) => job(`done${hour}`, "completed", `2026-10-08T0${hour}:00:00Z`))];
+    expect(runningJobs(jobs).map((item) => item.id)).toEqual(["orphan", "quiet", "new", "old"]);
+    expect(recentCompleted(jobs, now, 3).slice(0, 3).map((item) => item.id)).toEqual(["done4", "done3", "done2"]);
+    expect(recentCompleted(jobs, now, 3).length - 1).toBe(3);
+  });
+  it("formats movement boundaries and omits missing timestamps", () => {
+    expect(movementAgo(null, now)).toBeNull();
+    expect(movementAgo("2026-10-08T11:59:01Z", now)).toBe("動き 59秒前");
+    expect(movementAgo("2026-10-08T11:00:00Z", now)).toBe("動き 1時間前");
   });
 });
 describe("log parsing", () => {
@@ -79,6 +127,14 @@ describe("store", () => {
   const detail: JobDetail = { ...job("one", "running"), prompt: "Full request", turnId: null, model: null,
     effort: null, rendered: "Result", errorMessage: null, logFile: null };
   const log = { text: "Log output", start: 0, end: 10, truncatedBefore: false };
+  it("starts on running and opens tray and card jobs on all", () => {
+    expect(initialState.view).toBe("running");
+    const focused = reducer(initialState, { type: "openJob", id: "one" });
+    expect([focused.view, focused.selected]).toEqual(["all", "one"]);
+    const running = reducer(focused, { type: "view", view: "running" });
+    const card = reducer(running, { type: "openJob", id: "two" });
+    expect([card.view, card.selected]).toEqual(["all", "two"]);
+  });
 
   it("keeps detail and log when selecting the same job again", () => {
     let state = reducer(initialState, { type: "select", id: "one" });
