@@ -5,7 +5,7 @@ import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
 import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
-import { movementAgo, recentCompleted, runningJobs } from "./running";
+import { movementAgo, recentCompleted, runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
 
@@ -102,6 +102,31 @@ describe("job groups", () => {
   });
 });
 describe("running", () => {
+  it("groups by full workspace root, counts active and attention, and orders folders and cards", () => {
+    const a = { ...job("a", "running", "2026-10-08T11:00:00Z"), workspaceRoot: "C:\\Projects\\Same" };
+    const b = { ...job("b", "quiet", "2026-10-08T09:00:00Z"), workspaceRoot: "D:\\Other\\Same" };
+    const c = { ...job("c", "orphaned", "2026-10-08T08:00:00Z"), workspaceRoot: "D:\\Other\\Same" };
+    const d = { ...job("d", "running", "2026-10-08T10:00:00Z"), workspaceRoot: null };
+    const e = { ...job("e", "completed"), workspaceRoot: "D:\\Other\\Same" };
+    const groups = runningWorkspaces([a, b, c, d, e]);
+    expect(groups.map((group) => group.root)).toEqual(["D:\\Other\\Same", "C:\\Projects\\Same", null]);
+    expect(groups.map((group) => group.name)).toEqual(["Same", "Same", "フォルダが不明"]);
+    expect(groups[0].jobs.map((item) => item.id)).toEqual(["c", "b"]);
+    expect([groups[0].activeCount, groups[0].attentionCount]).toEqual([2, 2]);
+    expect([groups[1].activeCount, groups[1].attentionCount]).toEqual([1, 0]);
+    expect(runningWorkspaceName("C:\\Projects\\Same\\")).toBe("Same");
+  });
+  it("sorts folders with the latest start first within the same attention level", () => {
+    const old = { ...job("old", "quiet", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\Old" };
+    const recent = { ...job("recent", "quiet", "2026-10-08T09:00:00Z"), workspaceRoot: "C:\\Recent" };
+    expect(runningWorkspaces([old, recent]).map((group) => group.name)).toEqual(["Recent", "Old"]);
+  });
+  it("removes fixed command prefixes and preserves other messages", () => {
+    expect(shortLatestMessage("Running command: cargo test --offline")).toBe("cargo test --offline");
+    expect(shortLatestMessage("Command completed: cargo test (exit 0)")).toBe("cargo test (exit 0)");
+    expect(shortLatestMessage("Command failed: cargo test (exit 1)")).toBe("cargo test (exit 1)");
+    expect(shortLatestMessage("Applying 3 file changes.")).toBe("Applying 3 file changes.");
+  });
   it("shows only active jobs, with orphaned then quiet then newest, and keeps three recent endings", () => {
     const jobs = [job("old", "running", "2026-10-08T08:00:00Z"), job("new", "running", "2026-10-08T10:00:00Z"),
       job("quiet", "quiet"), job("orphan", "orphaned"), ...[1, 2, 3, 4].map((hour) => job(`done${hour}`, "completed", `2026-10-08T0${hour}:00:00Z`))];
