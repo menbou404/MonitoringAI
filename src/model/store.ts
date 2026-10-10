@@ -17,7 +17,9 @@ export function reducer(state: ViewState, action: Action): ViewState {
     case "snapshot": return { ...state, snapshot: action.value,
       selected: state.selected && action.value.jobs.some((j) => j.id === state.selected) ? state.selected : null,
       detail: state.selected && action.value.jobs.some((j) => j.id === state.selected) ? state.detail : null };
-    case "select": return { ...state, selected: action.id, detail: null, log: null, logNeedsReload: false, error: null };
+    case "select": return state.selected === action.id
+      ? state
+      : { ...state, selected: action.id, detail: null, log: null, logNeedsReload: false, error: null };
     case "detail": return { ...state, detail: action.value };
     case "log": return { ...state, log: action.value, logNeedsReload: false };
     case "prepend": return state.log && action.value.end === state.log.start

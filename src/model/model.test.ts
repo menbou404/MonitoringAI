@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JobDetail } from "../bindings/JobDetail";
 import type { JobSummary } from "../bindings/JobSummary";
 import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
@@ -75,6 +76,32 @@ describe("log parsing", () => {
   });
 });
 describe("store", () => {
+  const detail: JobDetail = { ...job("one", "running"), prompt: "Full request", turnId: null, model: null,
+    effort: null, rendered: "Result", errorMessage: null, logFile: null };
+  const log = { text: "Log output", start: 0, end: 10, truncatedBefore: false };
+
+  it("keeps detail and log when selecting the same job again", () => {
+    let state = reducer(initialState, { type: "select", id: "one" });
+    state = reducer(state, { type: "detail", value: detail });
+    state = reducer(state, { type: "log", value: log });
+
+    const selectedAgain = reducer(state, { type: "select", id: "one" });
+    expect(selectedAgain).toBe(state);
+    expect(selectedAgain.detail).toBe(detail);
+    expect(selectedAgain.log).toBe(log);
+  });
+
+  it("clears detail and log when selecting a different job", () => {
+    let state = reducer(initialState, { type: "select", id: "one" });
+    state = reducer(state, { type: "detail", value: detail });
+    state = reducer(state, { type: "log", value: log });
+
+    const selectedOther = reducer(state, { type: "select", id: "two" });
+    expect(selectedOther.selected).toBe("two");
+    expect(selectedOther.detail).toBeNull();
+    expect(selectedOther.log).toBeNull();
+  });
+
   it("applies every monitor event, unseen changes, deletion and log continuity", () => {
     let state = reducer(initialState, { type: "snapshot", value: snapshot });
     state = reducer(state, { type: "monitor", value: { type: "jobsChanged", changed: [job("one", "running")], removed: [] } });
