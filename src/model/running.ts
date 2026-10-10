@@ -6,28 +6,68 @@ export function runningJobs(jobs: JobSummary[]): JobSummary[] {
   const rank = (job: JobSummary) => job.effectiveState === "orphaned" ? 0 : job.effectiveState === "quiet" ? 1 : 2;
   return jobs.filter(isActive).sort((a, b) => rank(a) - rank(b) || startMs(b) - startMs(a) || a.id.localeCompare(b.id));
 }
-export type RunningWorkspace = { root: string | null; name: string; jobs: JobSummary[]; activeCount: number; attentionCount: number };
+export type RunningWorkspace = { key: string; root: string | null; name: string; jobs: JobSummary[]; activeCount: number; attentionCount: number };
 
 export function runningWorkspaceName(root: string | null): string {
   if (!root) return "フォルダが不明";
   return root.split(/[\\/]/).filter(Boolean).at(-1) ?? "フォルダが不明";
 }
 
-export function runningWorkspaces(jobs: JobSummary[]): RunningWorkspace[] {
-  const byRoot = new Map<string | null, JobSummary[]>();
+export function runningFolderKey(job: JobSummary): string {
+  return job.workspaceRoot || `unknown:${job.workspaceName?.trim() || "フォルダが不明"}`;
+}
+
+export function runningColumns(count: number): number {
+  return Math.min(Math.max(count, 1), 3);
+}
+
+export function dragMoved(startX: number, startY: number, x: number, y: number): boolean {
+  return Math.hypot(x - startX, y - startY) >= 5;
+}
+
+function ordered<T>(items: T[], saved: string[], key: (item: T) => string): T[] {
+  const positions = new Map(saved.map((value, index) => [value, index]));
+  const newItems = items.filter((item) => !positions.has(key(item)));
+  const savedItems = items.filter((item) => positions.has(key(item)))
+    .sort((a, b) => positions.get(key(a))! - positions.get(key(b))!);
+  return [...newItems, ...savedItems];
+}
+
+export function runningWorkspaces(jobs: JobSummary[], folderOrder: string[] = [], cardOrder: Record<string, string[]> = {}): RunningWorkspace[] {
+  const byRoot = new Map<string, JobSummary[]>();
   for (const job of jobs) {
     if (!isActive(job)) continue;
-    const root = job.workspaceRoot || null;
-    byRoot.set(root, [...(byRoot.get(root) ?? []), job]);
+    const key = runningFolderKey(job);
+    byRoot.set(key, [...(byRoot.get(key) ?? []), job]);
   }
-  const workspaces = [...byRoot].map(([root, members]) => ({
-    root, name: runningWorkspaceName(root), jobs: runningJobs(members), activeCount: members.length,
+  const workspaces = [...byRoot].map(([key, members]) => ({
+    key, root: members[0].workspaceRoot || null, name: runningWorkspaceName(members[0].workspaceRoot),
+    jobs: ordered(runningJobs(members), cardOrder[key] ?? [], (job) => job.id), activeCount: members.length,
     attentionCount: members.filter((job) => job.effectiveState === "orphaned" || job.effectiveState === "quiet").length,
   }));
   workspaces.sort((a, b) => Number(b.attentionCount > 0) - Number(a.attentionCount > 0)
     || Math.max(...b.jobs.map(startMs)) - Math.max(...a.jobs.map(startMs))
-    || (a.root ?? "").localeCompare(b.root ?? ""));
-  return workspaces;
+    || a.key.localeCompare(b.key));
+  return ordered(workspaces, folderOrder, (workspace) => workspace.key);
+}
+
+function move(ids: string[], source: string, target: string, after: boolean): string[] | null {
+  if (!ids.includes(source) || !ids.includes(target)) return null;
+  if (source === target) return ids;
+  const remaining = ids.filter((id) => id !== source);
+  const index = remaining.indexOf(target) + Number(after);
+  remaining.splice(index, 0, source);
+  return remaining;
+}
+
+export function reorderFolders(workspaces: RunningWorkspace[], source: string, target: string, after: boolean): string[] | null {
+  return move(workspaces.map((workspace) => workspace.key), source, target, after);
+}
+
+export function reorderCards(workspaces: RunningWorkspace[], sourceFolder: string, targetFolder: string, source: string, target: string, after: boolean): string[] | null {
+  if (sourceFolder !== targetFolder) return null;
+  const workspace = workspaces.find((entry) => entry.key === sourceFolder);
+  return workspace ? move(workspace.jobs.map((job) => job.id), source, target, after) : null;
 }
 
 export function shortLatestMessage(message: string): string {

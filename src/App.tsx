@@ -121,6 +121,10 @@ export function App() {
     </select>}<button title="設定" aria-label="設定" onClick={() => setSettingsOpen(true)}>⚙</button></div></div>
     {snapshot && <Banner health={snapshot.health} />}
     {state.view === "running" ? (snapshot ? <RunningView jobs={snapshot.jobs} unseen={snapshot.unseen} now={now} listDays={snapshot.settings.list_days}
+      folderOrder={snapshot.settings.runningFolderOrder} cardOrder={snapshot.cardOrder}
+      onReorderFolders={async (order) => { const saved = await api.setSettings({ ...snapshot.settings, runningFolderOrder: order }); dispatch({ type: "settings", value: saved }); }}
+      onReorderCards={async (folderKey, order) => { await api.setCardOrder(folderKey, order); dispatch({ type: "cardOrder", folderKey, ids: order }); }}
+      onReset={async () => { const saved = await api.resetRunningOrder(); dispatch({ type: "resetRunningOrder", settings: saved }); }}
       onOpen={openJob} onAll={() => { setWorkspace(null); dispatch({ type: "view", view: "all" }); }} /> : <div className="loading">読み込み中…</div>)
       : <div className="layout"><aside className="sidebar">
       {snapshot ? <JobList conversations={list} expanded={expanded} expandedCompleted={expandedCompleted} selected={state.selected} unseen={snapshot.unseen} health={snapshot.health} now={now} onSelect={select}

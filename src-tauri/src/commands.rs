@@ -133,6 +133,25 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<Settings, Stri
 }
 
 #[tauri::command]
+pub fn set_card_order(
+    state: State<'_, AppState>,
+    folder_key: String,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    state.set_card_order(&folder_key, ids)
+}
+
+#[tauri::command]
+pub fn reset_running_order(app: AppHandle) -> Result<Settings, String> {
+    let settings = app
+        .state::<AppState>()
+        .reset_running_order()
+        .map_err(|e| format!("並び順をリセットできませんでした: {e}"))?;
+    let _ = app.emit_to("main", "settings-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
 pub fn take_pending_focus(state: State<'_, AppState>) -> Option<String> {
     state.inner.lock().expect("app state").take_pending_focus()
 }

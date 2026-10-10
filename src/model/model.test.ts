@@ -5,20 +5,21 @@ import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
 import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
-import { movementAgo, recentCompleted, runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
+import { dragMoved, movementAgo, recentCompleted, reorderCards, reorderFolders, runningColumns, runningFolderKey,
+  runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 const settings: Settings = { notifications: { enabled: true, started: false, completed: true, failed: true, orphaned: true, quiet: false },
-  quiet_minutes: 10, list_days: 3, history_days: 30, extra_state_roots: [], autostart: false, window: null };
+  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null };
 function job(id: string, state: JobSummary["effectiveState"], date = "2026-10-08T11:00:00Z"): JobSummary {
   return { id, workspaceRoot: "C:\\Shared", workspaceName: "Shared", kind: "task", kindLabel: "rescue", title: "Task", summary: `Request ${id}`,
     status: state, phase: null, effectiveState: state, createdAt: date, startedAt: date, completedAt: state === "completed" ? date : null,
     updatedAt: date, pid: null, threadId: null, write: false, sessionId: null, latestMessage: null, logModifiedAt: null,
     context: null, previousJobId: null, archived: false, archivedNote: null, promptHead: null };
 }
-const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
+const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
 describe("format", () => {
   it("uses the Rust phase labels, preserves unknown phases and states, and handles elapsed boundaries", () => {
     expect(phaseName("verifying")).toBe("検証中");
@@ -102,6 +103,32 @@ describe("job groups", () => {
   });
 });
 describe("running", () => {
+  it("puts new folders and cards before saved order and ignores missing ones", () => {
+    const a = { ...job("a", "running", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\A" };
+    const b = { ...job("b", "running", "2026-10-08T09:00:00Z"), workspaceRoot: "C:\\A" };
+    const fresh = { ...job("fresh", "running", "2026-10-08T07:00:00Z"), workspaceRoot: "C:\\A" };
+    const other = { ...job("other", "quiet", "2026-10-08T07:00:00Z"), workspaceRoot: "C:\\Other" };
+    const newFolder = { ...job("new-folder", "running", "2026-10-08T06:00:00Z"), workspaceRoot: "C:\\New" };
+    const groups = runningWorkspaces([a, b, fresh, other, newFolder], ["C:\\A", "C:\\Other", "C:\\Gone"],
+      { "C:\\A": ["a", "b", "finished"] });
+    expect(groups.map((group) => group.key)).toEqual(["C:\\New", "C:\\A", "C:\\Other"]);
+    expect(groups[1].jobs.map((item) => item.id)).toEqual(["fresh", "a", "b"]);
+    expect(runningColumns(1)).toBe(1);
+    expect(runningColumns(2)).toBe(2);
+    expect(runningColumns(4)).toBe(3);
+    expect(dragMoved(0, 0, 3, 3)).toBe(false);
+    expect(dragMoved(0, 0, 3, 4)).toBe(true);
+  });
+  it("calculates insertion positions and rejects card drops across folders", () => {
+    const a = { ...job("a", "running"), workspaceRoot: "C:\\A" };
+    const b = { ...job("b", "running"), workspaceRoot: "C:\\A" };
+    const c = { ...job("c", "running"), workspaceRoot: "C:\\B" };
+    const groups = runningWorkspaces([a, b, c]);
+    expect(reorderFolders(groups, "C:\\B", "C:\\A", false)).toEqual(["C:\\B", "C:\\A"]);
+    expect(reorderFolders(groups, "missing", "C:\\A", true)).toBeNull();
+    expect(reorderCards(groups, "C:\\A", "C:\\A", "a", "b", true)).toEqual(["b", "a"]);
+    expect(reorderCards(groups, "C:\\A", "C:\\B", "a", "c", false)).toBeNull();
+  });
   it("groups by full workspace root, counts active and attention, and orders folders and cards", () => {
     const a = { ...job("a", "running", "2026-10-08T11:00:00Z"), workspaceRoot: "C:\\Projects\\Same" };
     const b = { ...job("b", "quiet", "2026-10-08T09:00:00Z"), workspaceRoot: "D:\\Other\\Same" };
@@ -115,6 +142,7 @@ describe("running", () => {
     expect([groups[0].activeCount, groups[0].attentionCount]).toEqual([2, 2]);
     expect([groups[1].activeCount, groups[1].attentionCount]).toEqual([1, 0]);
     expect(runningWorkspaceName("C:\\Projects\\Same\\")).toBe("Same");
+    expect(runningFolderKey(d)).toBe("unknown:Shared");
   });
   it("sorts folders with the latest start first within the same attention level", () => {
     const old = { ...job("old", "quiet", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\Old" };
@@ -159,6 +187,20 @@ describe("store", () => {
     const running = reducer(focused, { type: "view", view: "running" });
     const card = reducer(running, { type: "openJob", id: "two" });
     expect([card.view, card.selected]).toEqual(["all", "two"]);
+  });
+  it("updates card order in the snapshot and clears both orders on reset", () => {
+    let state = reducer(initialState, { type: "snapshot", value: snapshot });
+    state = reducer(state, { type: "cardOrder", folderKey: "C:\\Shared", ids: ["b", "a"] });
+    expect(state.snapshot?.cardOrder["C:\\Shared"]).toEqual(["b", "a"]);
+    state = reducer(state, { type: "resetRunningOrder", settings: { ...settings, runningFolderOrder: [] } });
+    expect(state.snapshot?.cardOrder).toEqual({});
+    expect(state.snapshot?.settings.runningFolderOrder).toEqual([]);
+  });
+  it("prunes card order when a job finishes", () => {
+    const running = job("a", "running");
+    let state = reducer(initialState, { type: "snapshot", value: { ...snapshot, jobs: [running], cardOrder: { "C:\\Shared": ["a"] } } });
+    state = reducer(state, { type: "monitor", value: { type: "jobsChanged", changed: [{ ...running, effectiveState: "completed" }], removed: [] } });
+    expect(state.snapshot?.cardOrder).toEqual({});
   });
 
   it("keeps detail and log when selecting the same job again", () => {

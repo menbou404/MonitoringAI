@@ -43,13 +43,21 @@
 .continuation { color: var(--accent); }
 .more-jobs { padding: 8px 12px 8px 34px; color: var(--accent); }
 .running-view { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
-.running-workspace { margin-bottom: 20px; }
-.running-workspace-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 9px; font-size: 14px; }
+.running-workspaces { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; }
+.running-workspace { position: relative; flex: 0 1 var(--running-width); width: var(--running-width); max-width: 100%; min-width: 0; padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.running-workspace-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 9px; font-size: 14px; cursor: grab; user-select: none; }
+.running-workspace-heading:active { cursor: grabbing; }
 .running-workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .running-workspace-count, .running-workspace-attention { flex: none; font-size: 11px; font-weight: 500; color: var(--muted); }
 .running-workspace-attention { color: #b46c08; }
 .running-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 10px; }
 .running-card { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 136px; gap: 8px; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; }
+.running-card { position: relative; }
+.running-workspace.insert-before::before, .running-workspace.insert-after::after,
+.running-card.insert-before::before, .running-card.insert-after::after { content: ""; position: absolute; z-index: 2; top: 5px; bottom: 5px; width: 3px; border-radius: 3px; background: var(--accent); pointer-events: none; }
+.running-workspace.insert-before::before, .running-card.insert-before::before { left: -7px; }
+.running-workspace.insert-after::after, .running-card.insert-after::after { right: -7px; }
+.reset-running-order { display: block; margin: 0 0 12px auto; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; color: var(--accent); background: var(--surface); }
 .running-card:hover, .running-card:focus-visible { background: var(--selected); outline-color: var(--accent); }
 .running-card.quiet { border-color: #d18418; }.running-card.orphaned { border-color: var(--error); }
 .running-card-top { display: flex; align-items: flex-start; gap: 7px; }

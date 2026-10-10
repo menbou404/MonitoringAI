@@ -62,6 +62,9 @@ pub struct Settings {
     pub list_days: u32,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub history_days: u32,
+    #[serde(rename = "runningFolderOrder")]
+    #[cfg_attr(feature = "ts", ts(rename = "runningFolderOrder"))]
+    pub running_folder_order: Vec<String>,
     pub extra_state_roots: Vec<PathBuf>,
     pub autostart: bool,
     pub window: Option<WindowPlacement>,
@@ -74,6 +77,7 @@ impl Default for Settings {
             quiet_minutes: 10,
             list_days: 3,
             history_days: 30,
+            running_folder_order: Vec::new(),
             extra_state_roots: Vec::new(),
             autostart: false,
             window: None,
@@ -163,6 +167,7 @@ mod tests {
         assert_eq!(settings.quiet_minutes, 10);
         assert_eq!(settings.list_days, 3);
         assert_eq!(settings.history_days, 30);
+        assert!(settings.running_folder_order.is_empty());
     }
     #[test]
     fn damaged_file_is_backed_up() {
@@ -224,5 +229,23 @@ mod tests {
         assert_eq!(settings.list_days, 7);
         assert_eq!(settings.history_days, 45);
         assert_eq!(settings.monitor_config().history_days, 45);
+    }
+    #[test]
+    fn running_folder_order_survives_save_and_old_settings_default_to_auto() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"list_days":3}"#).unwrap();
+        assert!(load(&path).unwrap().running_folder_order.is_empty());
+        let settings = Settings {
+            running_folder_order: vec!["C:\\Work".into(), "unknown:フォルダが不明".into()],
+            ..Settings::default()
+        };
+        save(&path, &settings).unwrap();
+        assert_eq!(
+            load(&path).unwrap().running_folder_order,
+            settings.running_folder_order
+        );
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("runningFolderOrder"));
     }
 }
