@@ -5,7 +5,7 @@ import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
 import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
-import { dragMoved, movementAgo, recentCompleted, reorderCards, reorderFolders, runningColumns, runningFolderKey,
+import { movementAgo, recentCompleted, reorderCards, reorderFolders, runningCardActivation, runningFolderKey,
   runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
@@ -103,6 +103,14 @@ describe("job groups", () => {
   });
 });
 describe("running", () => {
+  it("suppresses the click following dragstart but accepts a new mouse click", () => {
+    const dragging = runningCardActivation(false, "dragstart");
+    expect(dragging.open).toBe(false);
+    const strayClick = runningCardActivation(dragging.suppressClick, "click");
+    expect(strayClick).toEqual({ suppressClick: false, open: false });
+    const newPress = runningCardActivation(dragging.suppressClick, "mousedown");
+    expect(runningCardActivation(newPress.suppressClick, "click")).toEqual({ suppressClick: false, open: true });
+  });
   it("puts new folders and cards before saved order and ignores missing ones", () => {
     const a = { ...job("a", "running", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\A" };
     const b = { ...job("b", "running", "2026-10-08T09:00:00Z"), workspaceRoot: "C:\\A" };
@@ -113,11 +121,6 @@ describe("running", () => {
       { "C:\\A": ["a", "b", "finished"] });
     expect(groups.map((group) => group.key)).toEqual(["C:\\New", "C:\\A", "C:\\Other"]);
     expect(groups[1].jobs.map((item) => item.id)).toEqual(["fresh", "a", "b"]);
-    expect(runningColumns(1)).toBe(1);
-    expect(runningColumns(2)).toBe(2);
-    expect(runningColumns(4)).toBe(3);
-    expect(dragMoved(0, 0, 3, 3)).toBe(false);
-    expect(dragMoved(0, 0, 3, 4)).toBe(true);
   });
   it("calculates insertion positions and rejects card drops across folders", () => {
     const a = { ...job("a", "running"), workspaceRoot: "C:\\A" };

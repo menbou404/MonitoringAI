@@ -17,12 +17,11 @@ export function runningFolderKey(job: JobSummary): string {
   return job.workspaceRoot || `unknown:${job.workspaceName?.trim() || "フォルダが不明"}`;
 }
 
-export function runningColumns(count: number): number {
-  return Math.min(Math.max(count, 1), 3);
-}
-
-export function dragMoved(startX: number, startY: number, x: number, y: number): boolean {
-  return Math.hypot(x - startX, y - startY) >= 5;
+export function runningCardActivation(suppressClick: boolean, event: "dragstart" | "mousedown" | "click"):
+  { suppressClick: boolean; open: boolean } {
+  if (event === "dragstart") return { suppressClick: true, open: false };
+  if (event === "mousedown") return { suppressClick: false, open: false };
+  return { suppressClick: false, open: !suppressClick };
 }
 
 function ordered<T>(items: T[], saved: string[], key: (item: T) => string): T[] {
