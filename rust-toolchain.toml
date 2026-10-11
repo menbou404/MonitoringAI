@@ -1,0 +1,5 @@
+# Pin the toolchain so local runs and CI report the same clippy lints.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
