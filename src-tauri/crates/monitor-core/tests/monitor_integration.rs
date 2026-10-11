@@ -73,6 +73,24 @@ fn wait_transition(
     }
 }
 
+fn wait_for_events(
+    events: &Receiver<MonitorEvent>,
+    expected: &str,
+    mut complete: impl FnMut(MonitorEvent) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "timed out waiting for {expected}");
+        let event = events
+            .recv_timeout(remaining)
+            .unwrap_or_else(|error| panic!("failed while waiting for {expected}: {error}"));
+        if complete(event) {
+            return;
+        }
+    }
+}
+
 fn wait_until(mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !ready() {
@@ -150,19 +168,12 @@ fn snapshot_keeps_last_good_json_and_removes_pruned_jobs() {
         "pid":42,"createdAt":created,"workspaceRoot":"C:/fiction/work"}]),
     );
     wait_until(|| monitor.snapshot()[0].effective_state == EffectiveState::Running);
-    let mut transitioned = false;
-    while let Ok(event) = events.try_recv() {
-        if matches!(
-            event,
-            MonitorEvent::StateTransition {
-                to: EffectiveState::Running,
-                ..
-            }
-        ) {
-            transitioned = true;
-        }
-    }
-    assert!(transitioned);
+    wait_transition(
+        &events,
+        "task-fictional-1",
+        Some(EffectiveState::Queued),
+        EffectiveState::Running,
+    );
     let many: Vec<_> = (0..52)
         .map(|n| json!({"id":format!("task-fictional-{n}"),"status":"completed"}))
         .collect();
@@ -214,11 +225,9 @@ fn subscribed_log_emits_append() {
             .text
             .contains("Fictional update")
     );
-    assert!(
-        events
-            .try_iter()
-            .any(|event| matches!(event, MonitorEvent::LogAppended { .. }))
-    );
+    wait_for_events(&events, "LogAppended for task-log", |event| {
+        matches!(event, MonitorEvent::LogAppended { .. })
+    });
     let log = work.join("jobs/task-log.log");
     let prefix =
         "[2026-01-01T00:00:00Z] Fictional update\n\n[2026-01-01T00:00:01Z] Assistant message\n";
@@ -516,9 +525,16 @@ fn disappearing_running_job_becomes_archived_and_survives_restart() {
             j.id == "task-archived" && j.archived && j.effective_state == EffectiveState::Cancelled
         })
     });
-    let seen: Vec<_> = events.try_iter().collect();
-    assert!(seen.iter().any(|event| matches!(event, MonitorEvent::JobsChanged { changed, removed } if removed.is_empty() && changed.iter().any(|j| j.id == "task-archived" && j.archived))));
-    assert!(seen.iter().any(|event| matches!(event, MonitorEvent::StateTransition { id, to: EffectiveState::Cancelled, .. } if id == "task-archived")));
+    let mut seen = Vec::new();
+    wait_for_events(
+        &events,
+        "archived JobsChanged (empty removed) and Cancelled StateTransition for task-archived",
+        |event| {
+            seen.push(event);
+            seen.iter().any(|event| matches!(event, MonitorEvent::JobsChanged { changed, removed } if removed.is_empty() && changed.iter().any(|j| j.id == "task-archived" && j.archived)))
+                && seen.iter().any(|event| matches!(event, MonitorEvent::StateTransition { id, to: EffectiveState::Cancelled, .. } if id == "task-archived"))
+        },
+    );
     assert_eq!(
         monitor
             .job_detail("task-archived")
