@@ -3,17 +3,29 @@ import type { JobDetail } from "../bindings/JobDetail";
 import type { LogChunk } from "../bindings/LogChunk";
 import type { MonitorEvent } from "../bindings/MonitorEvent";
 import type { Settings } from "../bindings/Settings";
+import { isActive } from "./jobList";
+import { runningFolderKey } from "./running";
 
-export type ViewState = { snapshot: UiSnapshot | null; selected: string | null; detail: JobDetail | null;
+export type ViewState = { view: "running" | "all"; snapshot: UiSnapshot | null; selected: string | null; detail: JobDetail | null;
   log: LogChunk | null; logNeedsReload: boolean; error: string | null };
-export const initialState: ViewState = { snapshot: null, selected: null, detail: null, log: null, logNeedsReload: false, error: null };
+export const initialState: ViewState = { view: "running", snapshot: null, selected: null, detail: null, log: null, logNeedsReload: false, error: null };
 export type Action = { type: "snapshot"; value: UiSnapshot } | { type: "monitor"; value: MonitorEvent }
   | { type: "unseen"; value: string[] } | { type: "settings"; value: Settings }
-  | { type: "select"; id: string | null } | { type: "detail"; value: JobDetail | null }
+  | { type: "select"; id: string | null } | { type: "openJob"; id: string } | { type: "view"; view: "running" | "all" }
+  | { type: "cardOrder"; folderKey: string; ids: string[] } | { type: "resetRunningOrder"; settings: Settings }
+  | { type: "detail"; value: JobDetail | null }
   | { type: "log"; value: LogChunk | null } | { type: "prepend"; value: LogChunk }
   | { type: "error"; value: string | null };
 export function reducer(state: ViewState, action: Action): ViewState {
   switch (action.type) {
+    case "view": return { ...state, view: action.view };
+    case "cardOrder": return state.snapshot ? { ...state, snapshot: { ...state.snapshot,
+      cardOrder: { ...state.snapshot.cardOrder, [action.folderKey]: action.ids } } } : state;
+    case "resetRunningOrder": return state.snapshot ? { ...state, snapshot: { ...state.snapshot,
+      settings: action.settings, cardOrder: {} } } : state;
+    case "openJob": return { ...state, view: "all", selected: action.id,
+      detail: state.selected === action.id ? state.detail : null,
+      log: state.selected === action.id ? state.log : null, logNeedsReload: false, error: null };
     case "snapshot": return { ...state, snapshot: action.value,
       selected: state.selected && action.value.jobs.some((j) => j.id === state.selected) ? state.selected : null,
       detail: state.selected && action.value.jobs.some((j) => j.id === state.selected) ? state.detail : null };
@@ -36,7 +48,10 @@ export function reducer(state: ViewState, action: Action): ViewState {
         event.removed.forEach((id) => map.delete(id));
         event.changed.forEach((j) => map.set(j.id, j));
         const selected = state.selected && map.has(state.selected) ? state.selected : null;
-        return { ...state, snapshot: { ...state.snapshot, jobs: [...map.values()] }, selected,
+        const cardOrder = Object.fromEntries(Object.entries(state.snapshot.cardOrder).map(([folder, ids]) =>
+          [folder, ids.filter((id) => { const job = map.get(id); return job && isActive(job) && runningFolderKey(job) === folder; })] as const)
+          .filter(([, ids]) => ids.length > 0));
+        return { ...state, snapshot: { ...state.snapshot, jobs: [...map.values()], cardOrder }, selected,
           detail: selected ? state.detail : null, log: selected ? state.log : null };
       }
       if (event.type === "healthChanged") return { ...state, snapshot: { ...state.snapshot, health: event } };

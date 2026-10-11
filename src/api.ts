@@ -14,6 +14,8 @@ export const api = {
   markSeen: (id: string) => invoke<void>("mark_seen", { id }),
   openPath: (kind: "workspace" | "log", id: string) => invoke<void>("open_path", { kind, id }),
   setSettings: (settings: Settings) => invoke<Settings>("set_settings", { settings }),
+  setCardOrder: (folderKey: string, ids: string[]) => invoke<void>("set_card_order", { folderKey, ids }),
+  resetRunningOrder: () => invoke<Settings>("reset_running_order"),
   takePendingFocus: () => invoke<string | null>("take_pending_focus"),
   onMonitor: (fn: (event: MonitorEvent) => void): Promise<UnlistenFn> =>
     listen<MonitorEvent>("monitor-event", (event) => fn(event.payload)),

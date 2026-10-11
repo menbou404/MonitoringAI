@@ -4,20 +4,22 @@ import type { JobSummary } from "../bindings/JobSummary";
 import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
-import { groups, visibleJobIds } from "./jobList";
+import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
+import { movementAgo, recentCompleted, reorderCards, reorderFolders, runningCardActivation, runningFolderKey,
+  runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
 import { parseLog } from "./logParse";
 import { initialState, reducer } from "./store";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 const settings: Settings = { notifications: { enabled: true, started: false, completed: true, failed: true, orphaned: true, quiet: false },
-  quiet_minutes: 10, list_days: 3, history_days: 30, extra_state_roots: [], autostart: false, window: null };
+  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null };
 function job(id: string, state: JobSummary["effectiveState"], date = "2026-10-08T11:00:00Z"): JobSummary {
   return { id, workspaceRoot: "C:\\Shared", workspaceName: "Shared", kind: "task", kindLabel: "rescue", title: "Task", summary: `Request ${id}`,
     status: state, phase: null, effectiveState: state, createdAt: date, startedAt: date, completedAt: state === "completed" ? date : null,
     updatedAt: date, pid: null, threadId: null, write: false, sessionId: null, latestMessage: null, logModifiedAt: null,
     context: null, previousJobId: null, archived: false, archivedNote: null, promptHead: null };
 }
-const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
+const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
 describe("format", () => {
   it("uses the Rust phase labels, preserves unknown phases and states, and handles elapsed boundaries", () => {
     expect(phaseName("verifying")).toBe("検証中");
@@ -56,15 +58,117 @@ describe("job groups", () => {
     expect(result).toHaveLength(1);
     expect(result[0].chains[0].latest.id).toBe("third");
     expect(result[0].chains[0].previous.map((item) => item.id)).toEqual(["second", "first"]);
-    expect(visibleJobIds(result, {}, {})).toEqual(["third", "second", "first"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["third"]);
+    expect(result[0].chains[0].previous).toHaveLength(2);
     expect(visibleJobIds(result, { [result[0].key]: false }, {})).toEqual([]);
   });
-  it("shows three previous jobs first and expands the rest", () => {
+  it("keeps earlier jobs out of the list and counts the continuation", () => {
     const chain = Array.from({ length: 5 }, (_, index) => ({ ...job(`job-${index}`, "completed", `2026-10-08T0${index + 1}:00:00Z`),
       context: context("会話", `依頼 ${index}`), previousJobId: index ? `job-${index - 1}` : null }));
     const result = groups(chain, settings, now, null, ["job-4"]);
-    expect(visibleJobIds(result, {}, {})).toEqual(["job-4", "job-3", "job-2", "job-1"]);
-    expect(visibleJobIds(result, {}, { "job-4": true })).toEqual(["job-4", "job-3", "job-2", "job-1", "job-0"]);
+    expect(visibleJobIds(result, {}, {})).toEqual(["job-4"]);
+    expect(result[0].chains[0].previous).toHaveLength(4);
+  });
+  it("summarizes counts, sorts by status, and folds completed and cancelled jobs after two", () => {
+    const make = (id: string, state: JobSummary["effectiveState"], hour: number) => ({ ...job(id, state, `2026-10-08T${String(hour).padStart(2, "0")}:00:00Z`), context: context("会話", id),
+      completedAt: ["completed", "failed", "cancelled"].includes(state) ? `2026-10-08T${String(hour).padStart(2, "0")}:00:00Z` : null });
+    const jobs = [make("done1", "completed", 1), make("done2", "completed", 2), make("done3", "completed", 3), make("done4", "completed", 4),
+      make("cancel", "cancelled", 5), make("failed", "failed", 6), make("running", "running", 7), make("unseen", "completed", 8)];
+    const group = groups(jobs, settings, now, null, ["unseen"])[0];
+    expect(countSummary(group)).toBe("実行中 1 · 完了 5 · 失敗 1 · キャンセル 1");
+    expect(group.chains.map((chain) => chain.latest.id)).toEqual(["running", "unseen", "failed", "cancel", "done4", "done3", "done2", "done1"]);
+    expect(shownChains(group, false, ["unseen"]).map((chain) => chain.latest.id)).toEqual(["running", "unseen", "failed", "cancel", "done4"]);
+    expect(hiddenChains(group, ["unseen"])).toHaveLength(3);
+    expect(moreLabel(hiddenChains(group, ["unseen"]))).toBe("完了 3件を表示");
+    expect(moreLabel([{ latest: jobs[4], previous: [] }])).toBe("完了・キャンセル 1件を表示");
+    expect(shownChains(group, true, ["unseen"])).toHaveLength(8);
+    expect(visibleJobIds([group], {}, {}, ["unseen"])).toHaveLength(5);
+  });
+  it("keeps two simultaneous requests in one conversation distinct and groups unknown context by workspace", () => {
+    const a = { ...job("a", "running"), context: context("same", "画面"), workspaceName: "Shared" };
+    const b = { ...job("b", "running"), context: context("same", "テスト"), workspaceName: "Shared" };
+    const unknown = { ...job("c", "completed"), workspaceName: "Other", workspaceRoot: "C:\\Other" };
+    const result = groups([a, b, unknown], settings, now, null);
+    expect(result[0].chains.map((chain) => requestLead(chain.latest))).toEqual(["画面", "テスト"]);
+    expect(result[1].title).toBe("会話が不明 — Other");
+    expect(groups([a, b, unknown], settings, now, "Shared")).toHaveLength(1);
+  });
+  it("keeps a conversation with seven completed requests short", () => {
+    const jobs = Array.from({ length: 7 }, (_, index) => ({ ...job(`done-${index}`, "completed", `2026-10-08T0${index + 1}:00:00Z`),
+      context: context("long", `依頼 ${index}`) }));
+    const group = groups(jobs, settings, now, null, ["done-0"])[0];
+    expect(visibleJobIds([group], {}, {}, ["done-0"])).toHaveLength(3);
+    expect(hiddenChains(group, ["done-0"])).toHaveLength(4);
+    expect(visibleJobIds([group], {}, { [group.key]: true }, ["done-0"])).toHaveLength(7);
+  });
+});
+describe("running", () => {
+  it("suppresses the click following dragstart but accepts a new mouse click", () => {
+    const dragging = runningCardActivation(false, "dragstart");
+    expect(dragging.open).toBe(false);
+    const strayClick = runningCardActivation(dragging.suppressClick, "click");
+    expect(strayClick).toEqual({ suppressClick: false, open: false });
+    const newPress = runningCardActivation(dragging.suppressClick, "mousedown");
+    expect(runningCardActivation(newPress.suppressClick, "click")).toEqual({ suppressClick: false, open: true });
+  });
+  it("puts new folders and cards before saved order and ignores missing ones", () => {
+    const a = { ...job("a", "running", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\A" };
+    const b = { ...job("b", "running", "2026-10-08T09:00:00Z"), workspaceRoot: "C:\\A" };
+    const fresh = { ...job("fresh", "running", "2026-10-08T07:00:00Z"), workspaceRoot: "C:\\A" };
+    const other = { ...job("other", "quiet", "2026-10-08T07:00:00Z"), workspaceRoot: "C:\\Other" };
+    const newFolder = { ...job("new-folder", "running", "2026-10-08T06:00:00Z"), workspaceRoot: "C:\\New" };
+    const groups = runningWorkspaces([a, b, fresh, other, newFolder], ["C:\\A", "C:\\Other", "C:\\Gone"],
+      { "C:\\A": ["a", "b", "finished"] });
+    expect(groups.map((group) => group.key)).toEqual(["C:\\New", "C:\\A", "C:\\Other"]);
+    expect(groups[1].jobs.map((item) => item.id)).toEqual(["fresh", "a", "b"]);
+  });
+  it("calculates insertion positions and rejects card drops across folders", () => {
+    const a = { ...job("a", "running"), workspaceRoot: "C:\\A" };
+    const b = { ...job("b", "running"), workspaceRoot: "C:\\A" };
+    const c = { ...job("c", "running"), workspaceRoot: "C:\\B" };
+    const groups = runningWorkspaces([a, b, c]);
+    expect(reorderFolders(groups, "C:\\B", "C:\\A", false)).toEqual(["C:\\B", "C:\\A"]);
+    expect(reorderFolders(groups, "missing", "C:\\A", true)).toBeNull();
+    expect(reorderCards(groups, "C:\\A", "C:\\A", "a", "b", true)).toEqual(["b", "a"]);
+    expect(reorderCards(groups, "C:\\A", "C:\\B", "a", "c", false)).toBeNull();
+  });
+  it("groups by full workspace root, counts active and attention, and orders folders and cards", () => {
+    const a = { ...job("a", "running", "2026-10-08T11:00:00Z"), workspaceRoot: "C:\\Projects\\Same" };
+    const b = { ...job("b", "quiet", "2026-10-08T09:00:00Z"), workspaceRoot: "D:\\Other\\Same" };
+    const c = { ...job("c", "orphaned", "2026-10-08T08:00:00Z"), workspaceRoot: "D:\\Other\\Same" };
+    const d = { ...job("d", "running", "2026-10-08T10:00:00Z"), workspaceRoot: null };
+    const e = { ...job("e", "completed"), workspaceRoot: "D:\\Other\\Same" };
+    const groups = runningWorkspaces([a, b, c, d, e]);
+    expect(groups.map((group) => group.root)).toEqual(["D:\\Other\\Same", "C:\\Projects\\Same", null]);
+    expect(groups.map((group) => group.name)).toEqual(["Same", "Same", "フォルダが不明"]);
+    expect(groups[0].jobs.map((item) => item.id)).toEqual(["c", "b"]);
+    expect([groups[0].activeCount, groups[0].attentionCount]).toEqual([2, 2]);
+    expect([groups[1].activeCount, groups[1].attentionCount]).toEqual([1, 0]);
+    expect(runningWorkspaceName("C:\\Projects\\Same\\")).toBe("Same");
+    expect(runningFolderKey(d)).toBe("unknown:Shared");
+  });
+  it("sorts folders with the latest start first within the same attention level", () => {
+    const old = { ...job("old", "quiet", "2026-10-08T08:00:00Z"), workspaceRoot: "C:\\Old" };
+    const recent = { ...job("recent", "quiet", "2026-10-08T09:00:00Z"), workspaceRoot: "C:\\Recent" };
+    expect(runningWorkspaces([old, recent]).map((group) => group.name)).toEqual(["Recent", "Old"]);
+  });
+  it("removes fixed command prefixes and preserves other messages", () => {
+    expect(shortLatestMessage("Running command: cargo test --offline")).toBe("cargo test --offline");
+    expect(shortLatestMessage("Command completed: cargo test (exit 0)")).toBe("cargo test (exit 0)");
+    expect(shortLatestMessage("Command failed: cargo test (exit 1)")).toBe("cargo test (exit 1)");
+    expect(shortLatestMessage("Applying 3 file changes.")).toBe("Applying 3 file changes.");
+  });
+  it("shows only active jobs, with orphaned then quiet then newest, and keeps three recent endings", () => {
+    const jobs = [job("old", "running", "2026-10-08T08:00:00Z"), job("new", "running", "2026-10-08T10:00:00Z"),
+      job("quiet", "quiet"), job("orphan", "orphaned"), ...[1, 2, 3, 4].map((hour) => job(`done${hour}`, "completed", `2026-10-08T0${hour}:00:00Z`))];
+    expect(runningJobs(jobs).map((item) => item.id)).toEqual(["orphan", "quiet", "new", "old"]);
+    expect(recentCompleted(jobs, now, 3).slice(0, 3).map((item) => item.id)).toEqual(["done4", "done3", "done2"]);
+    expect(recentCompleted(jobs, now, 3).length - 1).toBe(3);
+  });
+  it("formats movement boundaries and omits missing timestamps", () => {
+    expect(movementAgo(null, now)).toBeNull();
+    expect(movementAgo("2026-10-08T11:59:01Z", now)).toBe("動き 59秒前");
+    expect(movementAgo("2026-10-08T11:00:00Z", now)).toBe("動き 1時間前");
   });
 });
 describe("log parsing", () => {
@@ -79,6 +183,28 @@ describe("store", () => {
   const detail: JobDetail = { ...job("one", "running"), prompt: "Full request", turnId: null, model: null,
     effort: null, rendered: "Result", errorMessage: null, logFile: null };
   const log = { text: "Log output", start: 0, end: 10, truncatedBefore: false };
+  it("starts on running and opens tray and card jobs on all", () => {
+    expect(initialState.view).toBe("running");
+    const focused = reducer(initialState, { type: "openJob", id: "one" });
+    expect([focused.view, focused.selected]).toEqual(["all", "one"]);
+    const running = reducer(focused, { type: "view", view: "running" });
+    const card = reducer(running, { type: "openJob", id: "two" });
+    expect([card.view, card.selected]).toEqual(["all", "two"]);
+  });
+  it("updates card order in the snapshot and clears both orders on reset", () => {
+    let state = reducer(initialState, { type: "snapshot", value: snapshot });
+    state = reducer(state, { type: "cardOrder", folderKey: "C:\\Shared", ids: ["b", "a"] });
+    expect(state.snapshot?.cardOrder["C:\\Shared"]).toEqual(["b", "a"]);
+    state = reducer(state, { type: "resetRunningOrder", settings: { ...settings, runningFolderOrder: [] } });
+    expect(state.snapshot?.cardOrder).toEqual({});
+    expect(state.snapshot?.settings.runningFolderOrder).toEqual([]);
+  });
+  it("prunes card order when a job finishes", () => {
+    const running = job("a", "running");
+    let state = reducer(initialState, { type: "snapshot", value: { ...snapshot, jobs: [running], cardOrder: { "C:\\Shared": ["a"] } } });
+    state = reducer(state, { type: "monitor", value: { type: "jobsChanged", changed: [{ ...running, effectiveState: "completed" }], removed: [] } });
+    expect(state.snapshot?.cardOrder).toEqual({});
+  });
 
   it("keeps detail and log when selecting the same job again", () => {
     let state = reducer(initialState, { type: "select", id: "one" });

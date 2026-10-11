@@ -12,7 +12,10 @@ mod window;
 
 use monitor_core::Monitor;
 use state::{AppSnapshot, AppState};
-use std::{collections::BTreeSet, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 
@@ -32,6 +35,8 @@ pub fn run() {
             commands::mark_seen,
             commands::open_path,
             commands::set_settings,
+            commands::set_card_order,
+            commands::reset_running_order,
             commands::take_pending_focus,
         ])
         .setup(|app| {
@@ -55,6 +60,7 @@ pub fn run() {
                 window_error: false,
                 pending_focus: None,
                 watched_log: None,
+                card_order: BTreeMap::new(),
             };
             app.manage(AppState {
                 monitor,
