@@ -96,13 +96,16 @@ Claude Code
         │ 名前付きパイプで接続
         ▼
 node app-server-broker.mjs     … broker.json の pid（ワークスペースごとに1つ。切り離されて常駐）
- └─ (cmd.exe) └─ codex.exe app-server
-                   └─ Codexが実行するコマンド（シェル、npm、cargo、起動したアプリ…）
+ └─ (シェル。Git Bash の bash が2段はさまることがある)
+     └─ codex.exe app-server
+         ├─ Codexが実行するコマンド（シェル、npm、cargo、起動したアプリ…）  … サンドボックスの中
+         └─ MCPサーバー、画面操作機能（computer use）の実行環境               … サンドボックスの外
 ```
 
 - ジョブの `pid` は、`queued` のときは切り離されたワーカー、`running` のときは companion のプロセスを指す。終了すると `null`。
 - ブローカーが別のジョブで使用中のときは、companion が自分の配下で `codex app-server` を直接起動する。このときCodexが実行するコマンドは**ジョブの `pid` の配下**にぶら下がる。
 - ブローカーは、ClaudeのセッションがSessionEndフックで終了するときに片付けられる。
+- Codexが実行するコマンドは、サンドボックス（`unelevated`）の下で動く。同じユーザー・同じセッション・整合性レベル Medium の制限付きトークンで、ジョブオブジェクトに入る。ウィンドウは `CodexSandboxDesktop-<ID>` という専用の見えないデスクトップに作られ、ユーザーの画面には出ない（2026-10-13 に確認。[フォーカスガード 1](focus-guard.md#1-p3で分かったこと)）。
 
 `broker.json` の形:
 
