@@ -27,7 +27,7 @@ pub struct UsageWindow {
     pub resets_at: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "ts",
     derive(ts_rs::TS),

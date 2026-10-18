@@ -7,6 +7,10 @@ import type { Settings } from "./bindings/Settings";
 import type { ModelSwitchStatus } from "./bindings/ModelSwitchStatus";
 import type { MonitorEvent } from "./bindings/MonitorEvent";
 
+import type { ModelAgent } from "./bindings/ModelAgent";
+import type { ModelCombination } from "./bindings/ModelCombination";
+import type { AgentModelSettings } from "./bindings/AgentModelSettings";
+
 export const api = {
   snapshot: () => invoke<UiSnapshot>("get_snapshot"),
   job: (id: string) => invoke<JobDetail | null>("get_job", { id }),
@@ -14,6 +18,8 @@ export const api = {
   watchLog: (id: string | null) => invoke<void>("watch_log", { id }),
   markSeen: (id: string) => invoke<void>("mark_seen", { id }),
   openPath: (kind: "workspace" | "log", id: string) => invoke<void>("open_path", { kind, id }),
+  switchModel: (agent: ModelAgent, target: ModelCombination) => invoke<ModelSwitchStatus>("switch_model", { agent, target }),
+  setModelSettings: (agent: ModelAgent, settings: AgentModelSettings) => invoke<Settings>("set_model_settings", { agent, settings }),
   setSettings: (settings: Settings) => invoke<Settings>("set_settings", { settings }),
   setCardOrder: (folderKey: string, ids: string[]) => invoke<void>("set_card_order", { folderKey, ids }),
   resetRunningOrder: () => invoke<Settings>("reset_running_order"),

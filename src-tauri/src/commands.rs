@@ -15,6 +15,33 @@ pub fn get_snapshot(state: State<'_, AppState>) -> UiSnapshot {
 }
 
 #[tauri::command]
+pub fn switch_model(
+    app: AppHandle,
+    agent: crate::model_switch_history::ModelAgent,
+    target: crate::settings::ModelCombination,
+) -> Result<crate::model_switch::ModelSwitchStatus, String> {
+    crate::model_switch::switch_manual(&app, agent, target)
+}
+
+#[tauri::command]
+pub fn set_model_settings(
+    app: AppHandle,
+    agent: crate::model_switch_history::ModelAgent,
+    settings: crate::settings::AgentModelSettings,
+) -> Result<Settings, String> {
+    settings.validate()?;
+    match agent {
+        crate::model_switch_history::ModelAgent::Codex => {}
+    }
+    let settings = app
+        .state::<AppState>()
+        .update_model_settings(settings)
+        .map_err(|e| format!("設定を保存できませんでした: {e}"))?;
+    let _ = app.emit_to("main", "settings-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
 pub fn get_job(state: State<'_, AppState>, id: String) -> Option<JobDetail> {
     state.monitor.job_detail(&id)
 }

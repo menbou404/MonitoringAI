@@ -12,14 +12,14 @@ import { initialState, reducer } from "./store";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 const settings: Settings = { notifications: { enabled: true, started: false, completed: true, failed: true, orphaned: true, quiet: false },
-  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null, auto_model_switch: false, model_switch_threshold: 90, base_model: "gpt-6.1-sol", saver_model: "gpt-6-luna", model_switched_by_app: false };
+  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null, agents: { codex: { autoSwitch: false, threshold: 90, base: { model: "gpt-6.1-sol", effort: null }, saver: { model: "gpt-6-luna", effort: null }, switchedByApp: false } } };
 function job(id: string, state: JobSummary["effectiveState"], date = "2026-10-08T11:00:00Z"): JobSummary {
   return { id, workspaceRoot: "C:\\Shared", workspaceName: "Shared", kind: "task", kindLabel: "rescue", title: "Task", summary: `Request ${id}`,
     status: state, phase: null, effectiveState: state, createdAt: date, startedAt: date, completedAt: state === "completed" ? date : null,
     updatedAt: date, pid: null, threadId: null, write: false, sessionId: null, latestMessage: null, logModifiedAt: null,
     context: null, previousJobId: null, archived: false, archivedNote: null, promptHead: null, model: null, effort: null };
 }
-const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, modelSwitch: { usage: null, currentModel: null, switchedByApp: false, error: null }, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
+const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, modelSwitch: { usage: null, currentEffort: null, models: null, history: [], currentModel: null, switchedByApp: false, error: null }, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
 describe("format", () => {
   it("formats model metadata and distinguishes unknown usage from zero", () => {
     expect(modelLabel({ model: "gpt-6-luna", effort: "high" })).toBe("gpt-6-luna · high");
@@ -259,7 +259,7 @@ describe("store", () => {
     let state = reducer(initialState, { type: "snapshot", value: { ...snapshot, jobs: [job("one", "running")] } });
     state = reducer(state, { type: "select", id: "one" });
     const status = { usage: { fiveHour: { usedPercent: 92, resetsAt: 100 }, week: { usedPercent: 18, resetsAt: 200 } },
-      currentModel: "gpt-6-luna", switchedByApp: true, error: null };
+      currentEffort: null, models: null, history: [], currentModel: "gpt-6-luna", switchedByApp: true, error: null };
     state = reducer(state, { type: "modelSwitch", value: status });
     expect(state.snapshot?.modelSwitch).toEqual(status);
     expect(state.snapshot?.jobs).toHaveLength(1);
