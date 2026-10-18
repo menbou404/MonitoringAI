@@ -3,7 +3,12 @@ import type { ModelInfo } from "../bindings/ModelInfo";
 
 export function modelName(model: string | null, models: ModelInfo[] | null): string {
   if (!model) return "不明";
-  return models?.find((entry) => entry.slug === model)?.display_name ?? `${model}（一覧に無いモデル）`;
+  return models?.find((entry) => entry.slug === model)?.display_name ?? (models?.length ? `${model}（一覧に無いモデル）` : model);
+}
+
+export function normalizeCombination(value: ModelCombination, models: ModelInfo[] | null): ModelCombination {
+  const supported = models?.find((model) => model.slug === value.model)?.supported_reasoning_levels;
+  return value.effort === null || supported?.some((level) => level.effort === value.effort) ? value : { ...value, effort: null };
 }
 
 export function combinationError(value: ModelCombination, models: ModelInfo[] | null): string | null {
