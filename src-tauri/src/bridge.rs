@@ -3,17 +3,29 @@ use monitor_core::{EffectiveState, MonitorEvent};
 use std::{
     sync::mpsc::{Receiver, RecvTimeoutError},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager};
 
 pub fn start(app: AppHandle, events: Receiver<MonitorEvent>) {
     thread::spawn(move || {
+        let mut controller = crate::model_switch::Controller::default();
+        let mut refresh = Instant::now();
+        let mut poll = Instant::now();
+        controller.tick(&app);
         loop {
-            match events.recv_timeout(Duration::from_secs(60)) {
+            match events.recv_timeout(Duration::from_secs(1)) {
                 Ok(event) => handle(&app, event),
-                Err(RecvTimeoutError::Timeout) => tray::refresh(&app),
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+            if poll.elapsed() >= Duration::from_secs(5) {
+                controller.tick(&app);
+                poll = Instant::now();
+            }
+            if refresh.elapsed() >= Duration::from_secs(60) {
+                tray::refresh(&app);
+                refresh = Instant::now();
             }
         }
     });

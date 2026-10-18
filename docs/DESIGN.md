@@ -43,6 +43,7 @@ Windowsのトレイに常駐するアプリで、この2つを解決する。
 | [design/tray-notification.md](design/tray-notification.md) | トレイアイコン、ツールチップ、メニュー、通知 | 1 |
 | [design/window-ui.md](design/window-ui.md) | 画面の構成、Rustと画面のやり取り（コマンド・イベント） | 1 |
 | [design/app-shell.md](design/app-shell.md) | 常駐、ウィンドウの寿命、設定、多重起動の防止、本アプリのログ | 1〜3 |
+| [design/model-switch.md](design/model-switch.md) | Codexの使用率の表示、使用率に応じたモデルの切り替え、ジョブのモデルの表示。**本アプリが唯一、外部の設定（Codexの `config.toml`）を書き換える機能** | 1（追加） |
 | [design/focus-guard.md](design/focus-guard.md) | フォーカスガード、PoC P2・P3 | 2 |
 | [design/launch-mcp.md](design/launch-mcp.md) | 起動の窓口（MCP）、PoC P1 | 3 |
 

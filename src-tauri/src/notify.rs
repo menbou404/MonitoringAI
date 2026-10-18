@@ -4,6 +4,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
+pub fn model_switch(app: &AppHandle, message: &str) {
+    if let Err(error) = app
+        .notification()
+        .builder()
+        .title("Codexのモデル切り替え")
+        .body(message)
+        .show()
+    {
+        tracing::warn!(%error, "notification failed");
+    }
+}
+
 pub fn transition(
     app: &AppHandle,
     from: Option<&EffectiveState>,

@@ -3,7 +3,9 @@ use std::{
     path::Path,
     time::{Duration, SystemTime},
 };
-use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
+use tracing_subscriber::EnvFilter;
+#[cfg(debug_assertions)]
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub fn init(dir: &Path) -> io::Result<tracing_appender::non_blocking::WorkerGuard> {
     fs::create_dir_all(dir)?;

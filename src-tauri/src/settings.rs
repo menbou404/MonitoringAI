@@ -67,6 +67,11 @@ pub struct Settings {
     pub running_folder_order: Vec<String>,
     pub extra_state_roots: Vec<PathBuf>,
     pub autostart: bool,
+    pub auto_model_switch: bool,
+    pub model_switch_threshold: u32,
+    pub base_model: String,
+    pub saver_model: String,
+    pub model_switched_by_app: bool,
     pub window: Option<WindowPlacement>,
 }
 
@@ -80,6 +85,11 @@ impl Default for Settings {
             running_folder_order: Vec::new(),
             extra_state_roots: Vec::new(),
             autostart: false,
+            auto_model_switch: false,
+            model_switch_threshold: 90,
+            base_model: "gpt-6.1-sol".into(),
+            saver_model: "gpt-6-luna".into(),
+            model_switched_by_app: false,
             window: None,
         }
     }
@@ -103,11 +113,24 @@ impl Settings {
         {
             return Err("追加の状態ルートには絶対パスを指定してください".into());
         }
+        if !(1..=100).contains(&self.model_switch_threshold) {
+            return Err("モデルを切り替えるしきい値は1〜100にしてください".into());
+        }
+        if self.base_model.trim().is_empty()
+            || self.saver_model.trim().is_empty()
+            || self.base_model == self.saver_model
+            || [&self.base_model, &self.saver_model]
+                .iter()
+                .any(|s| s.chars().any(char::is_control))
+        {
+            return Err("基本と節約用には異なるモデル名を入力してください".into());
+        }
         Ok(())
     }
 
     pub fn monitor_config(&self) -> monitor_core::MonitorConfig {
         monitor_core::MonitorConfig {
+            codex_home: crate::model_switch::codex_home(),
             quiet_after: Duration::from_secs(self.quiet_minutes.saturating_mul(60)),
             history_days: self.history_days,
             extra_state_roots: self.extra_state_roots.clone(),
@@ -168,6 +191,11 @@ mod tests {
         assert_eq!(settings.list_days, 3);
         assert_eq!(settings.history_days, 30);
         assert!(settings.running_folder_order.is_empty());
+        assert!(!settings.auto_model_switch);
+        assert_eq!(settings.model_switch_threshold, 90);
+        assert_eq!(settings.base_model, "gpt-6.1-sol");
+        assert_eq!(settings.saver_model, "gpt-6-luna");
+        assert!(!settings.model_switched_by_app);
     }
     #[test]
     fn damaged_file_is_backed_up() {
@@ -247,5 +275,27 @@ mod tests {
         );
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("runningFolderOrder"));
+    }
+
+    #[test]
+    fn validates_model_settings_and_persists_switch_ownership() {
+        let mut settings = Settings {
+            auto_model_switch: true,
+            model_switched_by_app: true,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save(&path, &settings).unwrap();
+        assert_eq!(load(&path).unwrap(), settings);
+        for threshold in [0, 101] {
+            settings.model_switch_threshold = threshold;
+            assert!(settings.validate().is_err());
+        }
+        settings.model_switch_threshold = 90;
+        for model in ["", " ", "bad\nmodel", "gpt-6-luna"] {
+            settings.base_model = model.into();
+            assert!(settings.validate().is_err());
+        }
     }
 }

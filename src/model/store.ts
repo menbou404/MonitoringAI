@@ -1,3 +1,4 @@
+import type { ModelSwitchStatus } from "../bindings/ModelSwitchStatus";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
 import type { JobDetail } from "../bindings/JobDetail";
 import type { LogChunk } from "../bindings/LogChunk";
@@ -10,6 +11,7 @@ export type ViewState = { view: "running" | "all"; snapshot: UiSnapshot | null; 
   log: LogChunk | null; logNeedsReload: boolean; error: string | null };
 export const initialState: ViewState = { view: "running", snapshot: null, selected: null, detail: null, log: null, logNeedsReload: false, error: null };
 export type Action = { type: "snapshot"; value: UiSnapshot } | { type: "monitor"; value: MonitorEvent }
+  | { type: "modelSwitch"; value: ModelSwitchStatus }
   | { type: "unseen"; value: string[] } | { type: "settings"; value: Settings }
   | { type: "select"; id: string | null } | { type: "openJob"; id: string } | { type: "view"; view: "running" | "all" }
   | { type: "cardOrder"; folderKey: string; ids: string[] } | { type: "resetRunningOrder"; settings: Settings }
@@ -18,6 +20,7 @@ export type Action = { type: "snapshot"; value: UiSnapshot } | { type: "monitor"
   | { type: "error"; value: string | null };
 export function reducer(state: ViewState, action: Action): ViewState {
   switch (action.type) {
+    case "modelSwitch": return state.snapshot ? { ...state, snapshot: { ...state.snapshot, modelSwitch: action.value } } : state;
     case "view": return { ...state, view: action.view };
     case "cardOrder": return state.snapshot ? { ...state, snapshot: { ...state.snapshot,
       cardOrder: { ...state.snapshot.cardOrder, [action.folderKey]: action.ids } } } : state;

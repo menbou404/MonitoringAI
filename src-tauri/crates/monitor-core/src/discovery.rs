@@ -48,6 +48,7 @@ pub struct MonitorConfig {
     pub claude_projects_dir: Option<PathBuf>,
     pub history_dir: Option<PathBuf>,
     pub history_days: u32,
+    pub codex_home: Option<PathBuf>,
 }
 
 impl Default for MonitorConfig {
@@ -70,6 +71,7 @@ impl Default for MonitorConfig {
                 .map(|home| home.join(".claude/projects")),
             history_dir: None,
             history_days: 30,
+            codex_home: None,
         }
     }
 }

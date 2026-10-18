@@ -4,6 +4,7 @@ import type { UiSnapshot } from "./bindings/UiSnapshot";
 import type { JobDetail } from "./bindings/JobDetail";
 import type { LogChunk } from "./bindings/LogChunk";
 import type { Settings } from "./bindings/Settings";
+import type { ModelSwitchStatus } from "./bindings/ModelSwitchStatus";
 import type { MonitorEvent } from "./bindings/MonitorEvent";
 
 export const api = {
@@ -19,6 +20,8 @@ export const api = {
   takePendingFocus: () => invoke<string | null>("take_pending_focus"),
   onMonitor: (fn: (event: MonitorEvent) => void): Promise<UnlistenFn> =>
     listen<MonitorEvent>("monitor-event", (event) => fn(event.payload)),
+  onModelSwitch: (fn: (status: ModelSwitchStatus) => void): Promise<UnlistenFn> =>
+    listen<ModelSwitchStatus>("model-switch-changed", (event) => fn(event.payload)),
   onUnseen: (fn: (ids: string[]) => void): Promise<UnlistenFn> =>
     listen<string[]>("unseen-changed", (event) => fn(event.payload)),
   onSettings: (fn: (settings: Settings) => void): Promise<UnlistenFn> =>

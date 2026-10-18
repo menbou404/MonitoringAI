@@ -78,7 +78,9 @@ fn refresh_inner(app: &AppHandle) -> tauri::Result<()> {
     let now = now_ms();
     let icon = Image::from_bytes(bytes(presentation::icon(&snap.jobs, &snap.unseen)))?;
     tray.set_icon(Some(icon))?;
-    tray.set_tooltip(Some(presentation::tooltip(&snap.jobs, now)))?;
+    let usage = crate::model_switch::usage_line(&snap.model_switch);
+    let tooltip = crate::presentation::tooltip_with_usage(&snap.jobs, now, &usage);
+    tray.set_tooltip(Some(tooltip))?;
     let menu = Menu::new(app)?;
     for row in presentation::menu_rows(
         &snap.jobs,

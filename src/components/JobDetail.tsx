@@ -1,7 +1,7 @@
 import type { JobDetail as Detail } from "../bindings/JobDetail";
 import type { JobSummary } from "../bindings/JobSummary";
 import type { LogChunk } from "../bindings/LogChunk";
-import { clock, conversationTitle, elapsed, elapsedJob, requestLead, startMs, stateName, workspaceName } from "../model/format";
+import { modelLabel, clock, conversationTitle, elapsed, elapsedJob, requestLead, startMs, stateName, workspaceName } from "../model/format";
 import { LogView } from "./LogView";
 
 export function JobDetail({ job, jobs, detail, log, now, error, onOlder, onOpen, onCopy, onSelect }: {
@@ -22,6 +22,7 @@ export function JobDetail({ job, jobs, detail, log, now, error, onOlder, onOpen,
     <header className="detail-header"><div className="detail-title"><h1>{requestLead(job)}</h1>
       <span className={`status ${job.effectiveState}`}>{stateName(job.effectiveState, job.phase, job.status, job.archivedNote)}</span></div>
       <div className="detail-context">{conversationTitle(job)} · {workspaceName(job)} · {job.kindLabel || job.kind || "種別不明"}</div>
+      {job.model && <div className="detail-context">モデル: {modelLabel(job)}</div>}
       {requester && <div className="detail-context">{requester.kind === "main" ? "会話から直接依頼" : requester.parentDescription ? `${requester.parentDescription} から依頼` : "サブエージェントから依頼"}</div>}
       <p>開始 {clock(job.startedAt ?? job.createdAt)} · {finished ? `所要 ${duration} · 終了 ${clock(end)}` : duration}{job.write && " · 書き込みあり"}</p></header>
     {(previous || next) && <nav className="continuity" aria-label="地続きのジョブ">

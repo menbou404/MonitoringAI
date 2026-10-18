@@ -2,4 +2,4 @@
 import type { NotificationSettings } from "./NotificationSettings";
 import type { WindowPlacement } from "./WindowPlacement";
 
-export type Settings = { notifications: NotificationSettings, quiet_minutes: number, list_days: number, history_days: number, runningFolderOrder: Array<string>, extra_state_roots: Array<string>, autostart: boolean, window: WindowPlacement | null, };
+export type Settings = { notifications: NotificationSettings, quiet_minutes: number, list_days: number, history_days: number, runningFolderOrder: Array<string>, extra_state_roots: Array<string>, autostart: boolean, auto_model_switch: boolean, model_switch_threshold: number, base_model: string, saver_model: string, model_switched_by_app: boolean, window: WindowPlacement | null, };

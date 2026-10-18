@@ -18,6 +18,7 @@ pub(crate) struct Store {
     logs: BTreeMap<String, (Option<String>, Option<DateTime<Utc>>)>,
     contexts: BTreeMap<String, JobContext>,
     detail_seen: BTreeSet<String>,
+    models: BTreeMap<String, crate::JobModel>,
     initialized: bool,
 }
 
@@ -30,6 +31,7 @@ impl Store {
             logs: BTreeMap::new(),
             contexts: BTreeMap::new(),
             detail_seen: BTreeSet::new(),
+            models: BTreeMap::new(),
             initialized: false,
         }
     }
@@ -70,6 +72,12 @@ impl Store {
                 })
             })
             .collect()
+    }
+    pub(crate) fn model_jobs(&self) -> Vec<Job> {
+        self.sources.values().flatten().cloned().collect()
+    }
+    pub(crate) fn set_models(&mut self, models: BTreeMap<String, crate::JobModel>) {
+        self.models = models;
     }
     pub(crate) fn detail_candidates(&self) -> Vec<(String, PathBuf)> {
         self.sources
@@ -158,6 +166,8 @@ impl Store {
                 next.insert(
                     job.id.clone(),
                     JobSummary {
+                        model: self.models.get(&job.id).and_then(|m| m.model.clone()),
+                        effort: self.models.get(&job.id).and_then(|m| m.effort.clone()),
                         id: job.id.clone(),
                         workspace_root: job.workspace_root.clone(),
                         workspace_name: name,

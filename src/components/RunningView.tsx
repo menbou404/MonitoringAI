@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from "react";
 import type { JobSummary } from "../bindings/JobSummary";
-import { conversationTitle, elapsedJob, requestLead, stateName } from "../model/format";
+import { modelLabel, conversationTitle, elapsedJob, requestLead, stateName } from "../model/format";
 import { completionTime, movementAgo, recentCompleted, reorderCards, reorderFolders, runningCardActivation,
   runningWorkspaces, shortLatestMessage } from "../model/running";
 
@@ -131,6 +131,7 @@ export function RunningView({ jobs, unseen, now, listDays, folderOrder, cardOrde
             <span className="running-card-conversation">{conversationTitle(job)}</span>
             <span className="running-card-meta"><span className={`status ${job.effectiveState}`}>{stateName(job.effectiveState, job.phase, job.status, job.archivedNote)}</span>
               <span>{elapsedJob(job, now)}{movement && ` · ${movement}`}</span></span>
+            {job.model && <span className="job-model">{modelLabel(job)}</span>}
             {job.latestMessage && <span className="running-message" title={job.latestMessage}>{shortLatestMessage(job.latestMessage)}</span>}
           </div>;
         })}</div>
