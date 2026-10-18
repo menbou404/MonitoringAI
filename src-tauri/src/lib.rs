@@ -4,6 +4,7 @@ mod bridge;
 mod commands;
 mod logging;
 mod model_switch;
+mod model_switch_history;
 mod notify;
 mod presentation;
 mod settings;
@@ -36,6 +37,8 @@ pub fn run() {
             commands::mark_seen,
             commands::open_path,
             commands::set_settings,
+            commands::switch_model,
+            commands::set_model_settings,
             commands::set_card_order,
             commands::reset_running_order,
             commands::take_pending_focus,
@@ -62,7 +65,12 @@ pub fn run() {
                 pending_focus: None,
                 watched_log: None,
                 card_order: BTreeMap::new(),
-                model_switch: Default::default(),
+                model_switch: model_switch::ModelSwitchStatus {
+                    history: model_switch_history::load(
+                        &history_dir.with_file_name("model-switch-history.json"),
+                    ),
+                    ..Default::default()
+                },
             };
             app.manage(AppState {
                 monitor,

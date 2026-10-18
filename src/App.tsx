@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { api } from "./api";
+import { ModelsPage } from "./components/ModelsPage";
 import { UsageBar } from "./components/UsageBar";
 import { Banner } from "./components/Banner";
 import { JobDetail } from "./components/JobDetail";
@@ -53,7 +54,7 @@ export function App() {
     })();
     return () => { alive = false; unlisteners.forEach((stop) => stop()); };
   }, []);
-  useEffect(() => { setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), state.view === "running" ? 5_000 : 30_000); return () => clearInterval(timer); }, [state.view]);
+  useEffect(() => { setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), state.view === "all" ? 30_000 : 5_000); return () => clearInterval(timer); }, [state.view]);
   useEffect(() => {
     if (!state.selected || state.view !== "all") { void api.watchLog(null); return; }
     let alive = true;
@@ -118,12 +119,16 @@ export function App() {
       <button type="button" aria-current={state.view === "running" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "running" })}>
         実行中 {snapshot?.jobs.filter((job) => ["queued", "running", "quiet", "orphaned"].includes(job.effectiveState)).length ?? 0}</button>
       <button type="button" aria-current={state.view === "all" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "all" })}>すべて</button>
+      <button type="button" aria-current={state.view === "models" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "models" })}>モデル</button>
     </nav><div className="topbar-actions">{state.view === "all" && <select aria-label="ワークスペース" value={workspace ?? ""} onChange={(e) => setWorkspace(e.target.value || null)}>
       <option value="">すべてのワークスペース</option>{snapshot && workspaces(snapshot.jobs).map((name) => <option value={name} key={name}>{name}</option>)}
     </select>}<button title="設定" aria-label="設定" onClick={() => setSettingsOpen(true)}>⚙</button></div></div>
-    {snapshot && <UsageBar status={snapshot.modelSwitch} threshold={snapshot.settings.model_switch_threshold} />}
+    {snapshot && <UsageBar status={snapshot.modelSwitch} threshold={snapshot.settings.agents.codex.threshold} onOpen={() => dispatch({ type: "view", view: "models" })} />}
     {snapshot && <Banner health={snapshot.health} />}
-    {state.view === "running" ? (snapshot ? <RunningView jobs={snapshot.jobs} unseen={snapshot.unseen} now={now} listDays={snapshot.settings.list_days}
+    {state.view === "models" ? (snapshot ? <ModelsPage settings={snapshot.settings} status={snapshot.modelSwitch} now={now}
+      onSave={async (agent, settings) => { const saved = await api.setModelSettings(agent, settings); dispatch({ type: "settings", value: saved }); }}
+      onManual={async (agent, target) => { const saved = await api.switchModel(agent, target); dispatch({ type: "modelSwitch", value: saved }); }} /> : <div className="loading">読み込み中…</div>)
+      : state.view === "running" ? (snapshot ? <RunningView jobs={snapshot.jobs} unseen={snapshot.unseen} now={now} listDays={snapshot.settings.list_days}
       folderOrder={snapshot.settings.runningFolderOrder} cardOrder={snapshot.cardOrder}
       onReorderFolders={async (order) => { const saved = await api.setSettings({ ...snapshot.settings, runningFolderOrder: order }); dispatch({ type: "settings", value: saved }); }}
       onReorderCards={async (folderKey, order) => { await api.setCardOrder(folderKey, order); dispatch({ type: "cardOrder", folderKey, ids: order }); }}
@@ -137,7 +142,7 @@ export function App() {
     </aside><main className="main-panel"><JobDetail job={job} jobs={snapshot?.jobs ?? []} detail={state.detail} log={state.log} now={now} error={state.error}
       onOlder={older} onOpen={openPath} onCopy={copy} onSelect={select} /></main></div>}
     {settingsOpen && snapshot && <SettingsDialog settings={snapshot.settings} onClose={() => setSettingsOpen(false)} onSave={async (value) => {
-      const saved = await api.setSettings(value); dispatch({ type: "settings", value: saved });
+      const saved = await api.setSettings({ ...value, agents: snapshot.settings.agents }); dispatch({ type: "settings", value: saved });
     }} />}
   </div>;
 }

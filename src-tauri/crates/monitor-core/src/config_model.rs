@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 // Track strings and containers so table-like text inside other values is never a header.
-fn model_value(config: &str) -> Result<Option<Range<usize>>, &'static str> {
+fn string_value(config: &str, key: &str) -> Result<Option<Range<usize>>, &'static str> {
     let mut quote = None;
     let mut multiline = false;
     let mut depth = 0_u32;
@@ -12,10 +12,12 @@ fn model_value(config: &str) -> Result<Option<Range<usize>>, &'static str> {
             if trimmed.starts_with('[') {
                 break;
             }
-            let key_end = if trimmed.starts_with("\"model\"") || trimmed.starts_with("'model'") {
-                Some(7)
-            } else if trimmed.starts_with("model") {
-                Some(5)
+            let double = format!("\"{key}\"");
+            let single = format!("'{key}'");
+            let key_end = if trimmed.starts_with(&double) || trimmed.starts_with(&single) {
+                Some(key.len() + 2)
+            } else if trimmed.starts_with(key) {
+                Some(key.len())
             } else {
                 None
             };
@@ -28,12 +30,12 @@ fn model_value(config: &str) -> Result<Option<Range<usize>>, &'static str> {
                         .as_bytes()
                         .first()
                         .copied()
-                        .ok_or("model value is missing")?;
+                        .ok_or("config string value is missing")?;
                     if !matches!(delimiter, b'"' | b'\'')
                         || value.starts_with("\"\"\"")
                         || value.starts_with("'''")
                     {
-                        return Err("unsupported model value");
+                        return Err("unsupported config string value");
                     }
                     let mut escaped = false;
                     for (i, byte) in value.bytes().enumerate().skip(1) {
@@ -41,13 +43,13 @@ fn model_value(config: &str) -> Result<Option<Range<usize>>, &'static str> {
                             if !value[i + 1..].trim().is_empty()
                                 && !value[i + 1..].trim_start().starts_with('#')
                             {
-                                return Err("invalid model value");
+                                return Err("invalid config string value");
                             }
                             return Ok(Some(start..start + i + 1));
                         }
                         escaped = delimiter == b'"' && !escaped && byte == b'\\';
                     }
-                    return Err("unterminated model value");
+                    return Err("unterminated config string value");
                 }
             }
         }
@@ -92,25 +94,32 @@ fn model_value(config: &str) -> Result<Option<Range<usize>>, &'static str> {
     Ok(None)
 }
 
-pub fn config_model(config: &str) -> Result<Option<String>, &'static str> {
-    model_value(config)?
+pub fn config_string(config: &str, key: &str) -> Result<Option<String>, &'static str> {
+    string_value(config, key)?
         .map(|range| {
             let value = &config[range];
             if value.starts_with('\'') {
                 Ok(value[1..value.len() - 1].to_owned())
             } else {
-                serde_json::from_str(value).map_err(|_| "unsupported model string")
+                serde_json::from_str(value).map_err(|_| "unsupported config string")
             }
         })
         .transpose()
 }
 
-pub fn replace_config_model(config: &str, model: &str) -> Result<String, &'static str> {
-    if model.trim().is_empty() || model.chars().any(char::is_control) {
-        return Err("invalid model name");
+pub fn replace_config_string(
+    config: &str,
+    key: &str,
+    new_value: &str,
+) -> Result<String, &'static str> {
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Err("invalid config key");
     }
-    let value = serde_json::to_string(model).map_err(|_| "invalid model name")?;
-    if let Some(range) = model_value(config)? {
+    if new_value.trim().is_empty() || new_value.chars().any(char::is_control) {
+        return Err("invalid config string");
+    }
+    let value = serde_json::to_string(new_value).map_err(|_| "invalid config string")?;
+    if let Some(range) = string_value(config, key)? {
         let mut result = config.to_owned();
         result.replace_range(range, &value);
         Ok(result)
@@ -120,7 +129,7 @@ pub fn replace_config_model(config: &str, model: &str) -> Result<String, &'stati
         } else {
             "\n"
         };
-        Ok(format!("model = {value}{newline}{config}"))
+        Ok(format!("{key} = {value}{newline}{config}"))
     }
 }
 
@@ -139,8 +148,14 @@ mod tests {
             ]
             .join(newline);
             let expected = input.replace("'base'", "\"saver\"");
-            assert_eq!(replace_config_model(&input, "saver").unwrap(), expected);
-            assert_eq!(config_model(&expected).unwrap().as_deref(), Some("saver"));
+            assert_eq!(
+                replace_config_string(&input, "model", "saver").unwrap(),
+                expected
+            );
+            assert_eq!(
+                config_string(&expected, "model").unwrap().as_deref(),
+                Some("saver")
+            );
         }
     }
 
@@ -152,9 +167,9 @@ mod tests {
             "model_provider = \"other\"\n",
         ] {
             let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
-            assert_eq!(config_model(input).unwrap(), None);
+            assert_eq!(config_string(input, "model").unwrap(), None);
             assert_eq!(
-                replace_config_model(input, "base").unwrap(),
+                replace_config_string(input, "model", "base").unwrap(),
                 format!("model = \"base\"{newline}{input}")
             );
         }
@@ -164,28 +179,75 @@ mod tests {
     fn ignores_multiline_strings_arrays_and_inline_tables() {
         let input = "note = '''\n[not.a.table]\nmodel = \"text\"\n'''\nitems = [\n'''\nmodel = \"text\"\n'''\n]\nmodel = \"base\"\n[profiles.x]\nmodel = \"profile\"\n";
         assert_eq!(
-            replace_config_model(input, "saver").unwrap(),
+            replace_config_string(input, "model", "saver").unwrap(),
             input.replace("model = \"base\"", "model = \"saver\"")
         );
         for quotes in ["''''", "'''''", "\"\"\"\"", "\"\"\"\"\""] {
             let delimiter = &quotes[..3];
             let input = format!("note = {delimiter}text{quotes}\nmodel = \"base\"\n");
-            assert_eq!(config_model(&input).unwrap().as_deref(), Some("base"));
+            assert_eq!(
+                config_string(&input, "model").unwrap().as_deref(),
+                Some("base")
+            );
         }
         let input = "other = { model = \"inline\" }\nmodel = \"base\"\n";
         assert_eq!(
-            replace_config_model(input, "saver").unwrap(),
+            replace_config_string(input, "model", "saver").unwrap(),
             input.replace("\"base\"", "\"saver\"")
         );
     }
 
     #[test]
     fn escapes_names_and_rejects_unsafe_values() {
-        let changed = replace_config_model("\"model\"=\"old\" # keep\n", "a\"b\\c").unwrap();
-        assert_eq!(config_model(&changed).unwrap().as_deref(), Some("a\"b\\c"));
+        let changed =
+            replace_config_string("\"model\"=\"old\" # keep\n", "model", "a\"b\\c").unwrap();
+        assert_eq!(
+            config_string(&changed, "model").unwrap().as_deref(),
+            Some("a\"b\\c")
+        );
         for input in ["model = 1", "model = \"broken", "model = \"x\" extra"] {
-            assert!(replace_config_model(input, "new").is_err());
+            assert!(replace_config_string(input, "model", "new").is_err());
         }
-        assert!(replace_config_model("", "bad\nname").is_err());
+        assert!(replace_config_string("", "model", "bad\nname").is_err());
+    }
+
+    #[test]
+    fn reads_and_replaces_each_root_string_key_independently() {
+        for newline in ["\n", "\r\n"] {
+            let input = [
+                "# keep",
+                "model = 'base' # model",
+                "'model_reasoning_effort' = 'low' # effort",
+                "[profiles.x]",
+                "model = 'profile'",
+                "model_reasoning_effort = 'high'",
+            ]
+            .join(newline);
+            let changed =
+                replace_config_string(&input, "model_reasoning_effort", "medium").unwrap();
+            assert_eq!(changed, input.replace("'low'", "\"medium\""));
+            assert_eq!(
+                config_string(&changed, "model").unwrap().as_deref(),
+                Some("base")
+            );
+            assert_eq!(
+                config_string(&changed, "model_reasoning_effort")
+                    .unwrap()
+                    .as_deref(),
+                Some("medium")
+            );
+            let table_only = format!(
+                "# keep{newline}[profiles.x]{newline}model_reasoning_effort = 'high'{newline}"
+            );
+            assert_eq!(
+                config_string(&table_only, "model_reasoning_effort").unwrap(),
+                None
+            );
+            assert_eq!(
+                replace_config_string(&table_only, "model_reasoning_effort", "low").unwrap(),
+                format!("model_reasoning_effort = \"low\"{newline}{table_only}")
+            );
+        }
+        assert!(replace_config_string("", "bad.key", "x").is_err());
     }
 }

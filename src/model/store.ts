@@ -7,13 +7,13 @@ import type { Settings } from "../bindings/Settings";
 import { isActive } from "./jobList";
 import { runningFolderKey } from "./running";
 
-export type ViewState = { view: "running" | "all"; snapshot: UiSnapshot | null; selected: string | null; detail: JobDetail | null;
+export type ViewState = { view: "running" | "all" | "models"; snapshot: UiSnapshot | null; selected: string | null; detail: JobDetail | null;
   log: LogChunk | null; logNeedsReload: boolean; error: string | null };
 export const initialState: ViewState = { view: "running", snapshot: null, selected: null, detail: null, log: null, logNeedsReload: false, error: null };
 export type Action = { type: "snapshot"; value: UiSnapshot } | { type: "monitor"; value: MonitorEvent }
   | { type: "modelSwitch"; value: ModelSwitchStatus }
   | { type: "unseen"; value: string[] } | { type: "settings"; value: Settings }
-  | { type: "select"; id: string | null } | { type: "openJob"; id: string } | { type: "view"; view: "running" | "all" }
+  | { type: "select"; id: string | null } | { type: "openJob"; id: string } | { type: "view"; view: "running" | "all" | "models" }
   | { type: "cardOrder"; folderKey: string; ids: string[] } | { type: "resetRunningOrder"; settings: Settings }
   | { type: "detail"; value: JobDetail | null }
   | { type: "log"; value: LogChunk | null } | { type: "prepend"; value: LogChunk }

@@ -36,6 +36,19 @@ pub struct UiSnapshot {
 }
 
 impl AppState {
+    pub fn update_model_settings(
+        &self,
+        mut settings: crate::settings::AgentModelSettings,
+    ) -> io::Result<Settings> {
+        let mut snapshot = self.inner.lock().expect("app state");
+        settings.switched_by_app = snapshot.settings.agents.codex.switched_by_app;
+        let mut next = snapshot.settings.clone();
+        next.agents.codex = settings;
+        settings::save(&self.settings_path, &next)?;
+        snapshot.settings = next.clone();
+        Ok(next)
+    }
+
     pub fn snapshot(&self) -> UiSnapshot {
         let snap = self.inner.lock().expect("app state");
         snap.ui_snapshot()
@@ -62,7 +75,7 @@ impl AppState {
             let changed = snapshot.settings.quiet_minutes != settings.quiet_minutes
                 || snapshot.settings.history_days != settings.history_days
                 || snapshot.settings.extra_state_roots != settings.extra_state_roots;
-            settings.model_switched_by_app = snapshot.settings.model_switched_by_app;
+            settings.agents.codex.switched_by_app = snapshot.settings.agents.codex.switched_by_app;
             settings::save(&self.settings_path, &settings)?;
             snapshot.settings = settings.clone();
             changed
@@ -348,7 +361,7 @@ mod tests {
         };
         let (monitor, _) = Monitor::start(config);
         let mut snapshot = test_snapshot();
-        snapshot.settings.model_switched_by_app = true;
+        snapshot.settings.agents.codex.switched_by_app = true;
         let mut app = AppState {
             monitor,
             settings_path: dir.path().join("settings.json"),
@@ -356,20 +369,37 @@ mod tests {
             inner: Mutex::new(snapshot),
         };
         app.update_settings(Settings::default()).unwrap();
-        assert!(app.snapshot().settings.model_switched_by_app);
+        assert!(app.snapshot().settings.agents.codex.switched_by_app);
         assert!(
             settings::load(&app.settings_path)
                 .unwrap()
-                .model_switched_by_app
+                .agents
+                .codex
+                .switched_by_app
         );
+        let before = app.snapshot().settings;
+        let mut model_settings = before.agents.codex.clone();
+        model_settings.switched_by_app = false;
+        model_settings.threshold = 80;
+        model_settings.base.effort = Some("high".into());
+        let saved = app.update_model_settings(model_settings.clone()).unwrap();
+        assert!(saved.agents.codex.switched_by_app);
+        assert_eq!(saved.agents.codex.threshold, 80);
+        assert_eq!(saved.agents.codex.base.effort.as_deref(), Some("high"));
+        assert_eq!(saved.notifications, before.notifications);
+        assert_eq!(saved.running_folder_order, before.running_folder_order);
         app.settings_path = dir.path().join("blocked.json");
         std::fs::create_dir(&app.settings_path).unwrap();
-        let changed = Settings {
-            base_model: "another-model".into(),
-            ..Default::default()
-        };
+        let mut changed = Settings::default();
+        changed.agents.codex.base.model = "another-model".into();
         assert!(app.update_settings(changed).is_err());
-        assert_eq!(app.snapshot().settings.base_model, "gpt-6.1-sol");
+        model_settings.threshold = 70;
+        assert!(app.update_model_settings(model_settings).is_err());
+        assert_eq!(app.snapshot().settings.agents.codex.threshold, 80);
+        assert_eq!(
+            app.snapshot().settings.agents.codex.base.model,
+            "gpt-6.1-sol"
+        );
     }
     #[test]
     fn unseen_tracks_only_new_terminal_transitions() {
