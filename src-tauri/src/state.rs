@@ -32,6 +32,7 @@ pub struct UiSnapshot {
     pub settings: Settings,
     #[cfg_attr(feature = "ts", ts(type = "Record<string, Array<string>>"))]
     pub card_order: BTreeMap<String, Vec<String>>,
+    pub model_switch: crate::model_switch::ModelSwitchStatus,
 }
 
 impl AppState {
@@ -55,12 +56,14 @@ impl AppState {
         Ok(())
     }
 
-    pub fn update_settings(&self, settings: Settings) -> io::Result<()> {
+    pub fn update_settings(&self, mut settings: Settings) -> io::Result<()> {
         let monitor_changed = {
             let mut snapshot = self.inner.lock().expect("app state");
             let changed = snapshot.settings.quiet_minutes != settings.quiet_minutes
                 || snapshot.settings.history_days != settings.history_days
                 || snapshot.settings.extra_state_roots != settings.extra_state_roots;
+            settings.model_switched_by_app = snapshot.settings.model_switched_by_app;
+            settings::save(&self.settings_path, &settings)?;
             snapshot.settings = settings.clone();
             changed
         };
@@ -68,7 +71,7 @@ impl AppState {
             self.monitor
                 .update_config(settings.monitor_config_with_history(self.history_dir.clone()));
         }
-        settings::save(&self.settings_path, &settings)
+        Ok(())
     }
 
     pub fn set_card_order(&self, folder_key: &str, ids: Vec<String>) -> Result<(), String> {
@@ -97,6 +100,7 @@ pub struct AppSnapshot {
     pub pending_focus: Option<String>,
     pub watched_log: Option<String>,
     pub card_order: BTreeMap<String, Vec<String>>,
+    pub model_switch: crate::model_switch::ModelSwitchStatus,
 }
 
 pub fn folder_key(job: &JobSummary) -> String {
@@ -146,6 +150,7 @@ impl AppSnapshot {
             health: self.health.clone(),
             settings: self.settings.clone(),
             card_order: self.card_order.clone(),
+            model_switch: self.model_switch.clone(),
         }
     }
 
@@ -263,6 +268,8 @@ mod tests {
             archived: false,
             archived_note: None,
             prompt_head: None,
+            model: None,
+            effort: None,
         }
     }
     fn test_snapshot() -> AppSnapshot {
@@ -280,6 +287,7 @@ mod tests {
             pending_focus: None,
             watched_log: None,
             card_order: BTreeMap::new(),
+            model_switch: Default::default(),
         }
     }
     #[test]
@@ -328,6 +336,41 @@ mod tests {
         assert!(settings.running_folder_order.is_empty());
         assert!(state.card_order.is_empty());
     }
+
+    #[test]
+    fn settings_updates_preserve_internal_switch_flag_and_fail_without_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = monitor_core::MonitorConfig {
+            state_roots: vec![],
+            installed_plugins_path: dir.path().join("version.json"),
+            claude_projects_dir: None,
+            ..Default::default()
+        };
+        let (monitor, _) = Monitor::start(config);
+        let mut snapshot = test_snapshot();
+        snapshot.settings.model_switched_by_app = true;
+        let mut app = AppState {
+            monitor,
+            settings_path: dir.path().join("settings.json"),
+            history_dir: dir.path().join("history"),
+            inner: Mutex::new(snapshot),
+        };
+        app.update_settings(Settings::default()).unwrap();
+        assert!(app.snapshot().settings.model_switched_by_app);
+        assert!(
+            settings::load(&app.settings_path)
+                .unwrap()
+                .model_switched_by_app
+        );
+        app.settings_path = dir.path().join("blocked.json");
+        std::fs::create_dir(&app.settings_path).unwrap();
+        let changed = Settings {
+            base_model: "another-model".into(),
+            ..Default::default()
+        };
+        assert!(app.update_settings(changed).is_err());
+        assert_eq!(app.snapshot().settings.base_model, "gpt-6.1-sol");
+    }
     #[test]
     fn unseen_tracks_only_new_terminal_transitions() {
         let mut state = AppSnapshot {
@@ -344,6 +387,7 @@ mod tests {
             pending_focus: None,
             watched_log: None,
             card_order: BTreeMap::new(),
+            model_switch: Default::default(),
         };
         state.apply(
             &MonitorEvent::StateTransition {
@@ -382,6 +426,7 @@ mod tests {
             pending_focus: Some("job-a".into()),
             watched_log: None,
             card_order: BTreeMap::new(),
+            model_switch: Default::default(),
         };
         assert_eq!(state.take_pending_focus().as_deref(), Some("job-a"));
         assert_eq!(state.take_pending_focus(), None);
@@ -418,6 +463,8 @@ mod tests {
             archived: false,
             archived_note: None,
             prompt_head: None,
+            model: None,
+            effort: None,
         });
         assert_eq!(
             state.replace_watched_log(Some("next".into())).unwrap(),

@@ -36,6 +36,10 @@ pub(crate) struct Record {
     session_id: Option<String>,
     context: Option<JobContext>,
     archived_note: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 pub(crate) fn head(text: &str, len: usize) -> String {
@@ -59,6 +63,8 @@ impl Record {
     fn from_live(summary: &JobSummary, detail: Option<&Job>) -> Self {
         let (rendered, truncated) = clipped(detail.and_then(|j| j.rendered.as_deref()));
         Self {
+            model: summary.model.clone(),
+            effort: summary.effort.clone(),
             version: 1,
             id: summary.id.clone(),
             workspace_root: summary.workspace_root.clone(),
@@ -119,6 +125,8 @@ impl Record {
             archived: true,
             archived_note: self.archived_note.clone(),
             prompt_head: self.prompt_head.clone(),
+            model: self.model.clone(),
+            effort: self.effort.clone(),
         }
     }
 
@@ -127,8 +135,6 @@ impl Record {
             summary: self.summary(),
             prompt: self.prompt_head.clone(),
             turn_id: None,
-            model: None,
-            effort: None,
             rendered: self.rendered.clone(),
             error_message: self.error_message.clone(),
             log_file: None,
@@ -234,9 +240,12 @@ impl History {
             old.is_some_and(|record| record.effective_state != summary.effective_state);
         let context_changed = old.is_some_and(|record| record.context != summary.context);
         let prompt_changed = old.is_some_and(|record| record.prompt_head != summary.prompt_head);
+        let model_changed =
+            old.is_some_and(|r| r.model != summary.model || r.effort != summary.effort);
         let reappeared = old.is_some_and(|record| record.archived_note.is_some());
         let create = old.is_none();
         if !create
+            && !model_changed
             && !context_changed
             && !prompt_changed
             && !reappeared
@@ -322,6 +331,8 @@ mod tests {
 
     fn record(id: &str, at: DateTime<Utc>) -> Record {
         Record {
+            model: None,
+            effort: None,
             version: 1,
             id: id.into(),
             workspace_root: Some("C:/fiction/work".into()),
@@ -428,5 +439,29 @@ mod tests {
         assert!(truncated);
         assert!(cut.unwrap().len() <= 64 * 1024);
         assert_eq!(head(&long, 200).chars().count(), 200);
+    }
+
+    #[test]
+    fn model_updates_survive_archiving_and_old_records_remain_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let mut history = History::open(dir.path().to_path_buf(), 30, now);
+        let mut summary = record("model-job", now).summary();
+        history.update_live(&summary, None);
+        summary.model = Some("fictional-model".into());
+        summary.effort = Some("high".into());
+        history.update_live(&summary, None);
+        history.archive(&summary.id);
+        history.flush();
+        let reopened = History::open(dir.path().to_path_buf(), 30, now);
+        let detail = reopened.get(&summary.id).unwrap().detail();
+        assert_eq!(detail.summary.model, summary.model);
+        assert_eq!(detail.summary.effort, summary.effort);
+        let mut old = serde_json::to_value(record("old", now)).unwrap();
+        old.as_object_mut().unwrap().remove("model");
+        old.as_object_mut().unwrap().remove("effort");
+        let old: Record = serde_json::from_value(old).unwrap();
+        assert!(old.summary().model.is_none());
+        assert!(old.detail().summary.effort.is_none());
     }
 }

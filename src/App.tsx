@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { api } from "./api";
+import { UsageBar } from "./components/UsageBar";
 import { Banner } from "./components/Banner";
 import { JobDetail } from "./components/JobDetail";
 import { JobList } from "./components/JobList";
@@ -40,6 +41,7 @@ export function App() {
         if (pending) dispatch({ type: "openJob", id: pending });
         const listeners = await Promise.all([
           api.onMonitor((value) => dispatch({ type: "monitor", value })),
+          api.onModelSwitch((value) => dispatch({ type: "modelSwitch", value })),
           api.onUnseen((value) => dispatch({ type: "unseen", value })),
           api.onSettings((value) => dispatch({ type: "settings", value })),
           api.onFocus((id) => { setWorkspace(null); dispatch({ type: "openJob", id }); }),
@@ -74,7 +76,7 @@ export function App() {
     api.job(state.selected).then((detail) => { if (alive) dispatch({ type: "detail", value: detail }); })
       .catch((error) => { if (alive) dispatch({ type: "error", value: String(error) }); });
     return () => { alive = false; };
-  }, [state.selected, state.view, job?.updatedAt, job?.effectiveState, job?.summary]);
+  }, [state.selected, state.view, job?.updatedAt, job?.effectiveState, job?.summary, job?.model, job?.effort]);
   async function older() {
     if (!state.selected || !state.log || !state.log.truncatedBefore) return;
     try {
@@ -119,6 +121,7 @@ export function App() {
     </nav><div className="topbar-actions">{state.view === "all" && <select aria-label="ワークスペース" value={workspace ?? ""} onChange={(e) => setWorkspace(e.target.value || null)}>
       <option value="">すべてのワークスペース</option>{snapshot && workspaces(snapshot.jobs).map((name) => <option value={name} key={name}>{name}</option>)}
     </select>}<button title="設定" aria-label="設定" onClick={() => setSettingsOpen(true)}>⚙</button></div></div>
+    {snapshot && <UsageBar status={snapshot.modelSwitch} threshold={snapshot.settings.model_switch_threshold} />}
     {snapshot && <Banner health={snapshot.health} />}
     {state.view === "running" ? (snapshot ? <RunningView jobs={snapshot.jobs} unseen={snapshot.unseen} now={now} listDays={snapshot.settings.list_days}
       folderOrder={snapshot.settings.runningFolderOrder} cardOrder={snapshot.cardOrder}

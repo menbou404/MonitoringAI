@@ -76,3 +76,7 @@
 .recent-list { margin-top: 20px; }.recent-list h2 { font-size: 13px; color: var(--muted); }
 .recent-list button { width: 100%; display: flex; justify-content: space-between; gap: 10px; padding: 10px 4px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); color: inherit; text-align: left; }
 .recent-list button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.recent-list time { color: var(--muted); flex: none; }
+
+.usage-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.job-label { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }.job-label .job-model { overflow: hidden; text-overflow: ellipsis; }
+.usage-high { color: var(--error); font-weight: 700; }.usage-model { margin-left: 10px; overflow-wrap: anywhere; }.usage-switched { color: var(--accent); border: 1px solid var(--border); border-radius: 10px; padding: 1px 7px; }.job-model { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }.settings-note { color: var(--muted); font-size: 12px; line-height: 1.6; }

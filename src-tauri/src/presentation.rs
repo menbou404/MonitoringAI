@@ -127,10 +127,27 @@ fn utf16_len(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+#[cfg(test)]
 pub fn tooltip(jobs: &[JobSummary], now_ms: i64) -> String {
+    tooltip_inner(jobs, now_ms, "", 127)
+}
+
+pub fn tooltip_with_usage(jobs: &[JobSummary], now_ms: i64, usage: &str) -> String {
+    let mut line = String::new();
+    for ch in usage.chars() {
+        if utf16_len(&line) + ch.len_utf16() > 85 {
+            line.push('…');
+            break;
+        }
+        line.push(ch);
+    }
+    tooltip_inner(jobs, now_ms, &format!("\n{line}"), 127)
+}
+
+fn tooltip_inner(jobs: &[JobSummary], now_ms: i64, suffix: &str, limit: usize) -> String {
     let active = active_jobs(jobs);
     if active.is_empty() {
-        return "Codex: 待機中".into();
+        return format!("Codex: 待機中{suffix}");
     }
     let prefix = format!("Codex: {}件実行中", active.len());
     let parts: Vec<_> = active
@@ -154,12 +171,12 @@ pub fn tooltip(jobs: &[JobSummary], now_ms: i64) -> String {
         if !tail.is_empty() {
             labels.push(tail);
         }
-        let text = format!("{}（{}）", prefix, labels.join(" / "));
-        if utf16_len(&text) <= 127 {
+        let text = format!("{}（{}）{}", prefix, labels.join(" / "), suffix);
+        if utf16_len(&text) <= limit {
             return text;
         }
     }
-    prefix
+    format!("{prefix}{suffix}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -317,6 +334,8 @@ mod tests {
             archived: false,
             archived_note: None,
             prompt_head: None,
+            model: None,
+            effort: None,
         }
     }
     #[test]
@@ -346,6 +365,13 @@ mod tests {
         let text = tooltip(&jobs, 0);
         assert!(utf16_len(&text) <= 127);
         assert!(text.contains("ほか"));
+        let usage = "5時間 92%・週 18% / gpt-6-luna";
+        let text = tooltip_with_usage(&jobs, 0, usage);
+        assert!(utf16_len(&text) <= 127);
+        assert!(text.ends_with(usage));
+        assert!(text.contains("ほか"));
+        let long = tooltip_with_usage(&jobs, 0, &"🚀".repeat(200));
+        assert!(utf16_len(&long) <= 127);
         assert_eq!(tooltip(&[], 0), "Codex: 待機中");
     }
     #[test]

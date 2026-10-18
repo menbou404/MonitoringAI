@@ -149,12 +149,6 @@ impl Monitor {
                     .or_else(|| j.summary.clone())
             }),
             turn_id: job.as_ref().and_then(|j| j.turn_id.clone()),
-            model: job
-                .as_ref()
-                .and_then(|j| j.request.as_ref().and_then(|r| r.model.clone())),
-            effort: job
-                .as_ref()
-                .and_then(|j| j.request.as_ref().and_then(|r| r.effort.clone())),
             rendered: job.as_ref().and_then(|j| j.rendered.clone()),
             error_message: job.as_ref().and_then(|j| j.error_message.clone()),
             log_file: job.as_ref().and_then(|j| j.log_file.clone()),
@@ -235,6 +229,7 @@ struct Worker {
     subscribed: BTreeSet<String>,
     watcher_error: Option<String>,
     last_version: Option<String>,
+    models: crate::JobModelReader,
 }
 
 impl Worker {
@@ -262,6 +257,7 @@ impl Worker {
             subscribed: BTreeSet::new(),
             watcher_error: None,
             last_version: None,
+            models: crate::JobModelReader::default(),
         }
     }
 
@@ -322,6 +318,9 @@ impl Worker {
                             .history_dir
                             .clone()
                             .map(|dir| History::open(dir, config.history_days, self.clock.now()));
+                    }
+                    if self.config.codex_home != config.codex_home {
+                        self.models = crate::JobModelReader::default();
                     }
                     self.config = *config;
                     self.stamps.clear();
@@ -537,7 +536,7 @@ impl Worker {
         self.update_health(&roots, error);
     }
 
-    fn reconcile(&self) {
+    fn reconcile(&mut self) {
         let candidates = self.store.lock().expect("store lock").detail_candidates();
         let details: BTreeMap<_, _> = candidates
             .into_iter()
@@ -548,6 +547,24 @@ impl Worker {
                     .map(|job| (id, job))
             })
             .collect();
+        let mut jobs = self.store.lock().expect("store lock").model_jobs();
+        let mut models = BTreeMap::new();
+        for job in &mut jobs {
+            if let Some(detail) = details.get(&job.id) {
+                job.request = detail.request.clone().or(job.request.clone());
+                job.thread_id = job.thread_id.clone().or(detail.thread_id.clone());
+                job.turn_id = job.turn_id.clone().or(detail.turn_id.clone());
+            }
+            let model = if let Some(home) = &self.config.codex_home {
+                self.models.read(home, job)
+            } else {
+                self.models.request_model(job)
+            };
+            models.insert(job.id.clone(), model);
+        }
+        self.models
+            .retain(&jobs.iter().map(|j| j.id.clone()).collect());
+        self.store.lock().expect("store lock").set_models(models);
         let mut history = self.history.lock().expect("history lock");
         let events = self.store.lock().expect("store lock").reconcile(
             self.probe.as_ref(),

@@ -3,6 +3,7 @@
 mod bridge;
 mod commands;
 mod logging;
+mod model_switch;
 mod notify;
 mod presentation;
 mod settings;
@@ -61,6 +62,7 @@ pub fn run() {
                 pending_focus: None,
                 watched_log: None,
                 card_order: BTreeMap::new(),
+                model_switch: Default::default(),
             };
             app.manage(AppState {
                 monitor,

@@ -3,7 +3,7 @@ import type { JobDetail } from "../bindings/JobDetail";
 import type { JobSummary } from "../bindings/JobSummary";
 import type { Settings } from "../bindings/Settings";
 import type { UiSnapshot } from "../bindings/UiSnapshot";
-import { elapsed, finishedTime, phaseName, requestLead, stateName } from "./format";
+import { elapsed, finishedTime, modelLabel, phaseName, requestLead, stateName, usagePercent } from "./format";
 import { countSummary, groups, hiddenChains, moreLabel, shownChains, visibleJobIds } from "./jobList";
 import { movementAgo, recentCompleted, reorderCards, reorderFolders, runningCardActivation, runningFolderKey,
   runningJobs, runningWorkspaceName, runningWorkspaces, shortLatestMessage } from "./running";
@@ -12,15 +12,23 @@ import { initialState, reducer } from "./store";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 const settings: Settings = { notifications: { enabled: true, started: false, completed: true, failed: true, orphaned: true, quiet: false },
-  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null };
+  quiet_minutes: 10, list_days: 3, history_days: 30, runningFolderOrder: [], extra_state_roots: [], autostart: false, window: null, auto_model_switch: false, model_switch_threshold: 90, base_model: "gpt-6.1-sol", saver_model: "gpt-6-luna", model_switched_by_app: false };
 function job(id: string, state: JobSummary["effectiveState"], date = "2026-10-08T11:00:00Z"): JobSummary {
   return { id, workspaceRoot: "C:\\Shared", workspaceName: "Shared", kind: "task", kindLabel: "rescue", title: "Task", summary: `Request ${id}`,
     status: state, phase: null, effectiveState: state, createdAt: date, startedAt: date, completedAt: state === "completed" ? date : null,
     updatedAt: date, pid: null, threadId: null, write: false, sessionId: null, latestMessage: null, logModifiedAt: null,
-    context: null, previousJobId: null, archived: false, archivedNote: null, promptHead: null };
+    context: null, previousJobId: null, archived: false, archivedNote: null, promptHead: null, model: null, effort: null };
 }
-const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
+const snapshot: UiSnapshot = { jobs: [], unseen: [], settings, cardOrder: {}, modelSwitch: { usage: null, currentModel: null, switchedByApp: false, error: null }, health: { pluginVersion: "1.0.6", versionSupported: true, watchedRoots: [], lastError: null } };
 describe("format", () => {
+  it("formats model metadata and distinguishes unknown usage from zero", () => {
+    expect(modelLabel({ model: "gpt-6-luna", effort: "high" })).toBe("gpt-6-luna · high");
+    expect(modelLabel({ model: "gpt-6-luna", effort: null })).toBe("gpt-6-luna");
+    expect(modelLabel({ model: null, effort: "high" })).toBeNull();
+    expect(usagePercent(null)).toBe("—");
+    expect(usagePercent({ usedPercent: 0 })).toBe("0%");
+    expect(usagePercent({ usedPercent: 92.5 })).toBe("93%");
+  });
   it("uses the Rust phase labels, preserves unknown phases and states, and handles elapsed boundaries", () => {
     expect(phaseName("verifying")).toBe("検証中");
     expect(phaseName("future")).toBe("future");
@@ -245,5 +253,19 @@ describe("store", () => {
     state = reducer(state, { type: "monitor", value: { type: "stateTransition", id: "one", from: "running", to: "completed" } });
     state = reducer(state, { type: "monitor", value: { type: "jobsChanged", changed: [], removed: ["one"] } });
     expect(state.selected).toBeNull();
+  });
+
+  it("applies usage and switching updates without changing jobs or selection", () => {
+    let state = reducer(initialState, { type: "snapshot", value: { ...snapshot, jobs: [job("one", "running")] } });
+    state = reducer(state, { type: "select", id: "one" });
+    const status = { usage: { fiveHour: { usedPercent: 92, resetsAt: 100 }, week: { usedPercent: 18, resetsAt: 200 } },
+      currentModel: "gpt-6-luna", switchedByApp: true, error: null };
+    state = reducer(state, { type: "modelSwitch", value: status });
+    expect(state.snapshot?.modelSwitch).toEqual(status);
+    expect(state.snapshot?.jobs).toHaveLength(1);
+    expect(state.selected).toBe("one");
+    state = reducer(state, { type: "monitor", value: { type: "jobsChanged", changed: [{ ...job("one", "running"), model: "gpt-6.1-sol", effort: "high" }], removed: [] } });
+    expect(state.snapshot?.jobs[0].model).toBe("gpt-6.1-sol");
+    expect(state.snapshot?.modelSwitch).toEqual(status);
   });
 });

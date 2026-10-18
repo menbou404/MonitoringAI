@@ -104,6 +104,53 @@ fn write_state(path: &Path, jobs: serde_json::Value) {
 }
 
 #[test]
+fn rollout_model_reaches_summary_detail_and_archived_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let work = root.join("fiction");
+    fs::create_dir_all(work.join("jobs")).unwrap();
+    let home = dir.path().join("codex");
+    let sessions = home.join("sessions/2026/10/15");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(sessions.join("rollout-fiction-thread-one.jsonl"), concat!(
+        "{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"old\",\"model\":\"old-model\"}}\n",
+        "{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"current\",\"model\":\"resolved-model\",\"effort\":\"high\"}}\n"
+    )).unwrap();
+    let job = json!({"id":"task-model","status":"completed","threadId":"thread-one","turnId":"current",
+        "createdAt":"2026-10-16T00:01:00Z","request":{"model":"fallback"}});
+    write_state(&work.join("state.json"), json!([job]));
+    fs::write(work.join("jobs/task-model.json"), job.to_string()).unwrap();
+    let config = MonitorConfig {
+        state_roots: vec![root],
+        installed_plugins_path: dir.path().join("version.json"),
+        claude_projects_dir: None,
+        codex_home: Some(home),
+        history_dir: Some(dir.path().join("history")),
+        rescan_interval: Duration::from_millis(100),
+        ..Default::default()
+    };
+    let clock = Arc::new(FixedClock("2026-10-16T01:00:00Z".parse().unwrap()));
+    let (monitor, _) = Monitor::start_with(config.clone(), Arc::new(Alive), clock.clone());
+    wait_until(|| {
+        monitor
+            .snapshot()
+            .iter()
+            .any(|j| j.model.as_deref() == Some("resolved-model"))
+    });
+    let detail = monitor.job_detail("task-model").unwrap();
+    assert_eq!(detail.summary.effort.as_deref(), Some("high"));
+    write_state(&work.join("state.json"), json!([]));
+    wait_until(|| monitor.snapshot().iter().any(|j| j.archived));
+    drop(monitor);
+    let (monitor, _) = Monitor::start_with(config, Arc::new(Alive), clock);
+    wait_until(|| !monitor.snapshot().is_empty());
+    let archived = monitor.job_detail("task-model").unwrap();
+    assert!(archived.summary.archived);
+    assert_eq!(archived.summary.model.as_deref(), Some("resolved-model"));
+    assert_eq!(archived.summary.effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn snapshot_keeps_last_good_json_and_removes_pruned_jobs() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("state");

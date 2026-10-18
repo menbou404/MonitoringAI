@@ -4,7 +4,7 @@ import type { JobSummary } from "../bindings/JobSummary";
 import type { Health } from "../bindings/Health";
 import type { Conversation, JobChain } from "../model/jobList";
 import { countSummary, hiddenChains, isActive, moreLabel, shownChains } from "../model/jobList";
-import { elapsedJob, finishedTime, requestLead, stateName, workspaceName } from "../model/format";
+import { modelLabel, elapsedJob, finishedTime, requestLead, stateName, workspaceName } from "../model/format";
 
 type Row = { kind: "heading"; conversation: Conversation; open: boolean }
   | { kind: "job"; chain: JobChain }
@@ -60,7 +60,8 @@ function JobRow({ chain, selected, unseen, now, onSelect }: { chain: JobChain; s
     className={`job-row ${selected ? "selected" : ""}`} onClick={() => onSelect(job.id)}>
     <span className={`state-icon ${job.effectiveState}`} aria-hidden="true">{icon(job)}</span>
     {unseen && <span className="unseen-dot" aria-label="未確認" />}
-    <strong className="job-lead">{lead}</strong>
+    <span className="job-label"><strong className="job-lead">{lead}</strong>
+      {job.model && <small className="job-model" title={modelLabel(job) ?? undefined}>{modelLabel(job)}</small>}</span>
     {chain.previous.length > 0 && <small className="continuation">続き {chain.previous.length}</small>}
     {job.kindLabel && job.kindLabel !== "rescue" && <small className="job-kind">{job.kindLabel}</small>}
     <span className={`job-status ${isActive(job) ? "active" : ""}`}>

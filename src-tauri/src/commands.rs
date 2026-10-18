@@ -127,6 +127,13 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<Settings, Stri
     app.state::<AppState>()
         .update_settings(settings.clone())
         .map_err(|e| format!("設定を保存できませんでした: {e}"))?;
+    let settings = app
+        .state::<AppState>()
+        .inner
+        .lock()
+        .expect("app state")
+        .settings
+        .clone();
     tray::refresh(&app);
     let _ = app.emit_to("main", "settings-changed", &settings);
     Ok(settings)
@@ -187,6 +194,8 @@ mod tests {
             archived: false,
             archived_note: None,
             prompt_head: None,
+            model: None,
+            effort: None,
         }
     }
     #[test]

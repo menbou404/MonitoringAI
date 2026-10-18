@@ -148,6 +148,8 @@ pub struct JobSummary {
     pub archived: bool,
     pub archived_note: Option<String>,
     pub prompt_head: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -163,8 +165,6 @@ pub struct JobDetail {
     pub summary: JobSummary,
     pub prompt: Option<String>,
     pub turn_id: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
     pub rendered: Option<String>,
     pub error_message: Option<String>,
     pub log_file: Option<String>,

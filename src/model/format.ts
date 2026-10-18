@@ -40,3 +40,10 @@ export const finishedTime = (value: string | null, now: number) => {
 export const workspaceName = (job: JobSummary) => job.workspaceName || "不明なワークスペース";
 export const requestLead = (job: JobSummary) => job.context?.requester?.description?.trim() || job.promptHead?.trim() || job.title?.trim() || "依頼内容なし";
 export const conversationTitle = (job: JobSummary) => job.context?.sessionTitle?.trim() || "名前のない会話";
+
+export function modelLabel(job: { model: string | null; effort: string | null }): string | null {
+  return job.model ? job.model + (job.effort ? " · " + job.effort : "") : null;
+}
+export function usagePercent(window: { usedPercent: number } | null | undefined): string {
+  return window ? Math.round(window.usedPercent) + "%" : "—";
+}
