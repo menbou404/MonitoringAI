@@ -118,7 +118,7 @@ export function App() {
     <div className="topbar"><nav className="view-switch" aria-label="画面の切り替え">
       <button type="button" aria-current={state.view === "running" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "running" })}>
         実行中 {snapshot?.jobs.filter((job) => ["queued", "running", "quiet", "orphaned"].includes(job.effectiveState)).length ?? 0}</button>
-      <button type="button" aria-current={state.view === "all" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "all" })}>すべて</button>
+      <button type="button" aria-current={state.view === "all" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "all" })}>ログ</button>
       <button type="button" aria-current={state.view === "models" ? "page" : undefined} onClick={() => dispatch({ type: "view", view: "models" })}>モデル</button>
     </nav><div className="topbar-actions">{state.view === "all" && <select aria-label="ワークスペース" value={workspace ?? ""} onChange={(e) => setWorkspace(e.target.value || null)}>
       <option value="">すべてのワークスペース</option>{snapshot && workspaces(snapshot.jobs).map((name) => <option value={name} key={name}>{name}</option>)}
